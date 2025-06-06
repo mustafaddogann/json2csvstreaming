@@ -9,12 +9,12 @@ import ijson
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("connection_string")
-    parser.add_argument("input_container")
-    parser.add_argument("input_path")
-    parser.add_argument("output_container")
-    parser.add_argument("output_path_prefix")
-    parser.add_argument("nested_path")
+    parser.add_argument("AZURE_STORAGE_CONNECTION_STRING")
+    parser.add_argument("INPUT_CONTAINER_NAME")
+    parser.add_argument("INPUT_BLOB_PATH_PREFIX")
+    parser.add_argument("OUTPUT_CONTAINER_NAME")
+    parser.add_argument("OUTPUT_BLOB_PATH_PREFIX")
+    parser.add_argument("NESTED_PATH", nargs='?', default="")
     return parser.parse_args()
 
 # ---------- UTILS ----------
@@ -122,8 +122,15 @@ def extract_nested_rows(json_data: Any, nested_path: str) -> List[Dict[str, Any]
 
 def main():
     args = parse_args()
-    blob_service = BlobServiceClient.from_connection_string(args.connection_string)
-    blob_client = blob_service.get_blob_client(container=args.input_container, blob=args.input_path)
+    connection_string = args.AZURE_STORAGE_CONNECTION_STRING
+    input_container = args.INPUT_CONTAINER_NAME
+    input_blob_path = args.INPUT_BLOB_PATH_PREFIX
+    output_container = args.OUTPUT_CONTAINER_NAME
+    output_path_prefix = args.OUTPUT_BLOB_PATH_PREFIX
+    nested_path = args.NESTED_PATH
+
+    blob_service = BlobServiceClient.from_connection_string(connection_string)
+    blob_client = blob_service.get_blob_client(container=input_container, blob=input_blob_path)
 
     stream = blob_client.download_blob()
     first_byte = stream.read(1)
@@ -135,29 +142,29 @@ def main():
     full_stream.seek(0)
     start_char = first_byte.decode('utf-8').strip()
 
-    if args.nested_path:
+    if nested_path:
         full_stream.seek(0)
         raw_data = json.load(full_stream)
-        nested_rows = extract_nested_rows(raw_data, args.nested_path)
+        nested_rows = extract_nested_rows(raw_data, nested_path)
         if not nested_rows:
-            print(f"No valid nested rows found at path: {args.nested_path}")
+            print(f"No valid nested rows found at path: {nested_path}")
             return
 
         reference_keys = list(flatten_json(raw_data).keys())
         headers = build_ordered_headers(nested_rows, reference_keys)
-        base_name = os.path.splitext(os.path.basename(args.input_path))[0]
-        nested_part = sanitize_filename(args.nested_path)
+        base_name = os.path.splitext(os.path.basename(input_blob_path))[0]
+        nested_part = sanitize_filename(nested_path)
         csv_filename = f"{base_name}_{nested_part}.csv"
-        output_path = os.path.join(args.output_path_prefix, csv_filename)
-        write_csv_blob(blob_service, args.output_container, output_path, headers, nested_rows)
+        output_path = os.path.join(output_path_prefix, csv_filename)
+        write_csv_blob(blob_service, output_container, output_path, headers, nested_rows)
 
     elif start_char == '[':
         flat_rows = []
         reference_keys = []
         headers = []
-        base_filename = os.path.splitext(os.path.basename(args.input_path))[0]
+        base_filename = os.path.splitext(os.path.basename(input_blob_path))[0]
         csv_filename = base_filename + ".csv"
-        output_path = os.path.join(args.output_path_prefix, csv_filename)
+        output_path = os.path.join(output_path_prefix, csv_filename)
 
         output_stream = StringIO()
         first = True
@@ -172,7 +179,7 @@ def main():
             output_stream.write(escaped_row + '\n')
 
         output_stream.seek(0)
-        blob_client = blob_service.get_blob_client(container=args.output_container, blob=output_path)
+        blob_client = blob_service.get_blob_client(container=output_container, blob=output_path)
         blob_client.upload_blob(output_stream.getvalue().encode('utf-8'), overwrite=True)
         print(f"Wrote CSV: {output_path} with {len(headers)} columns.")
 
@@ -199,10 +206,10 @@ def main():
             return
 
         headers = build_ordered_headers(flat_rows, reference_keys)
-        base_filename = os.path.splitext(os.path.basename(args.input_path))[0]
+        base_filename = os.path.splitext(os.path.basename(input_blob_path))[0]
         csv_filename = base_filename + ".csv"
-        output_path = os.path.join(args.output_path_prefix, csv_filename)
-        write_csv_blob(blob_service, args.output_container, output_path, headers, flat_rows)
+        output_path = os.path.join(output_path_prefix, csv_filename)
+        write_csv_blob(blob_service, output_container, output_path, headers, flat_rows)
 
     else:
         print(f"Unexpected first character in JSON: {start_char}")
