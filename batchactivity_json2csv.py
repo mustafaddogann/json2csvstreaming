@@ -4,7 +4,7 @@ import argparse
 import json
 from typing import Any, Dict, List, Iterator, Generator, Tuple
 from azure.storage.blob import BlobServiceClient, ContentSettings
-from io import StringIO
+from io import BytesIO
 import ijson
 
 def parse_args():
