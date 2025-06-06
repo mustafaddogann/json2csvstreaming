@@ -2,217 +2,203 @@ import os
 import re
 import argparse
 import json
-from typing import Any, Dict, List, Tuple
-from azure.storage.blob import BlobServiceClient
-from io import BytesIO, StringIO
+from typing import Any, Dict, List, Iterator, Generator, Tuple
+from azure.storage.blob import BlobServiceClient, ContentSettings
+from io import StringIO
 import ijson
 
 def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("AZURE_STORAGE_CONNECTION_STRING")
-    parser.add_argument("INPUT_CONTAINER_NAME")
-    parser.add_argument("INPUT_BLOB_PATH_PREFIX")
-    parser.add_argument("OUTPUT_CONTAINER_NAME")
-    parser.add_argument("OUTPUT_BLOB_PATH_PREFIX")
-    parser.add_argument("NESTED_PATH", nargs='?', default="")
+    """Parses command-line arguments."""
+    parser = argparse.ArgumentParser(description="Convert large JSON files from Azure Blob Storage to CSV.")
+    parser.add_argument("AZURE_STORAGE_CONNECTION_STRING", help="Azure Storage connection string.")
+    parser.add_argument("INPUT_CONTAINER_NAME", help="Name of the input container.")
+    parser.add_argument("INPUT_BLOB_PATH_PREFIX", help="Full path to the input JSON blob.")
+    parser.add_argument("OUTPUT_CONTAINER_NAME", help="Name of the output container.")
+    parser.add_argument("OUTPUT_BLOB_PATH_PREFIX", help="Path prefix for the output CSV file.")
+    parser.add_argument("NESTED_PATH", nargs='?', default="", help="Optional dot-separated path to a nested array to extract, e.g., 'data.records'.")
     return parser.parse_args()
 
 # ---------- UTILS ----------
 
 def flatten_json(y: Any, parent_key: str = '', sep: str = '_') -> Dict[str, Any]:
+    """Flattens a nested dictionary."""
     out = {}
     def flatten(x: Any, name: str = ''):
         if isinstance(x, dict):
             for a in x:
                 flatten(x[a], f"{name}{a}{sep}")
         elif isinstance(x, list):
-            if all(isinstance(i, dict) for i in x):
-                return  # Skip nested dict-lists
-            else:
-                for i, item in enumerate(x):
-                    flatten(item, f"{name}{i}{sep}")
+            # To prevent memory issues, we avoid expanding lists here.
+            # Lists of simple types will be converted to a string.
+            # Lists of dicts should be handled by expand_rows_generator.
+            out[name[:-1]] = json.dumps(x)
         else:
             out[name[:-1]] = x
     flatten(y, parent_key)
     return out
 
-def expand_rows(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    base_rows = [{}]
-    for key, value in data.items():
-        if isinstance(value, list) and all(isinstance(i, dict) for i in value):
-            new_rows = []
-            for row in base_rows:
-                for item in value:
-                    new_row = row.copy()
-                    new_row.update(flatten_json(item, f"{key}_"))
-                    new_rows.append(new_row)
-            base_rows = new_rows
-        else:
-            for row in base_rows:
-                row[key] = value
-    return base_rows
+def expand_rows_generator(row: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
+    """
+    Expands a single row into multiple rows if it contains lists of dictionaries.
+    This is a generator to keep memory usage low.
+    """
+    base_row = {k: v for k, v in row.items() if not (isinstance(v, list) and v and isinstance(v[0], dict))}
+    list_of_dicts_to_expand = {k: v for k, v in row.items() if isinstance(v, list) and v and isinstance(v[0], dict)}
+
+    if not list_of_dicts_to_expand:
+        yield base_row
+        return
+
+    # Iteratively expand one list of dicts at a time
+    current_key = next(iter(list_of_dicts_to_expand))
+    remaining_items = {k:v for k,v in list_of_dicts_to_expand.items() if k != current_key}
+    
+    for item in list_of_dicts_to_expand[current_key]:
+        new_row = base_row.copy()
+        new_row.update(flatten_json(item, f"{current_key}{'_'}"))
+        new_row.update(remaining_items)
+        # Recursively expand other lists
+        yield from expand_rows_generator(new_row)
+
 
 def sanitize_filename(filename: str) -> str:
+    """Removes illegal characters from a filename."""
     return re.sub(r'[\\/*?:"<>|]', "_", filename)
 
 def escape_csv_value(value: Any) -> str:
+    """Escapes a value for CSV formatting."""
     if value is None:
-        return '""'
-    val = str(value).replace('\\', '\\\\').replace('"', '\\"')
-    return f'"{val}"'
+        return ''
+    # Convert to string, escape double quotes, and wrap in double quotes
+    s_val = str(value).replace('"', '""')
+    return f'"{s_val}"'
 
-def write_csv_blob(blob_service: BlobServiceClient, container: str, blob_path: str, headers: List[str], rows: List[Dict[str, Any]]):
-    output_stream = StringIO()
-    output_stream.write(','.join([f'"{h}"' for h in headers]) + '\n')
-    for row in rows:
-        escaped_row = ','.join([escape_csv_value(row.get(h, "")) for h in headers])
-        output_stream.write(escaped_row + '\n')
-    output_stream.seek(0)
-    blob_client = blob_service.get_blob_client(container=container, blob=blob_path)
-    blob_client.upload_blob(output_stream.getvalue().encode('utf-8'), overwrite=True)
-    print(f"Wrote CSV: {blob_path} with {len(headers)} columns and {len(rows)} rows.")
+def upload_csv_stream(blob_client: Any, row_iterator: Iterator[Dict[str, Any]]):
+    """
+    Streams rows to a CSV file in Azure Blob Storage.
+    It determines headers from the first row and writes data in chunks.
+    """
+    try:
+        first_row = next(row_iterator)
+    except StopIteration:
+        print("Warning: JSON stream was empty, no CSV file created.")
+        return 0, []
 
-def build_ordered_headers(rows: List[Dict[str, Any]], reference_order: List[str] = None) -> List[str]:
-    seen = set()
-    ordered = []
-    if reference_order:
-        for key in reference_order:
-            if key not in seen:
-                seen.add(key)
-                ordered.append(key)
-    for row in rows:
-        for key in row:
-            if key not in seen:
-                seen.add(key)
-                ordered.append(key)
-    return ordered
+    headers = list(first_row.keys())
+    
+    def data_generator() -> Generator[bytes, None, None]:
+        # Yield header row first
+        yield (','.join(map(escape_csv_value, headers)) + '\n').encode('utf-8')
+        
+        # Yield the first row's data
+        yield (','.join(escape_csv_value(first_row.get(h)) for h in headers) + '\n').encode('utf-8')
+        
+        # Yield remaining rows
+        count = 1
+        for row in row_iterator:
+            # Ensure all headers are present, filling missing ones with empty string
+            yield (','.join(escape_csv_value(row.get(h)) for h in headers) + '\n').encode('utf-8')
+            count += 1
+        
+        # This print statement is for demonstration; it will execute after the generator is consumed.
+        # The actual count should be tracked outside.
+    
+    row_count = 0
+    # Use a wrapper to count the rows as they are generated
+    def counting_generator_wrapper():
+        nonlocal row_count
+        gen = data_generator()
+        # count header
+        yield next(gen) 
+        # count data rows
+        for data in gen:
+            row_count +=1
+            yield data
 
-def extract_nested_rows(json_data: Any, nested_path: str) -> List[Dict[str, Any]]:
-    def traverse(data, path_parts, parents, current_path):
-        if not path_parts:
-            full_prefix = '_'.join(current_path)
-            if isinstance(data, list):
-                rows = []
-                for item in data:
-                    row = {}
-                    for parent_obj, parent_path in parents:
-                        row.update(flatten_json(parent_obj, parent_path + '_'))
-                    row.update(flatten_json(item, full_prefix + '_'))
-                    rows.append(row)
-                return rows
-            elif isinstance(data, dict):
-                row = {}
-                for parent_obj, parent_path in parents:
-                    row.update(flatten_json(parent_obj, parent_path + '_'))
-                row.update(flatten_json(data, full_prefix + '_'))
-                return [row]
-            return []
-        key = path_parts[0]
-        if isinstance(data, dict):
-            return traverse(data.get(key), path_parts[1:], parents + [(data, '_'.join(current_path))], current_path + [key])
-        elif isinstance(data, list):
-            rows = []
-            for item in data:
-                rows.extend(traverse(item, path_parts, parents, current_path))
-            return rows
-        return []
-    return traverse(json_data, nested_path.split('.'), [], [])
+    print(f"Starting upload to {blob_client.blob_name}...")
+    blob_client.upload_blob(counting_generator_wrapper(), overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+    
+    return row_count + 1, headers # Add 1 for the first row processed
 
-# ---------- MAIN ----------
+
+# ---------- MAIN LOGIC ----------
+
+def get_json_iterator(stream: Any, nested_path: str) -> Iterator[Dict]:
+    """
+    Returns an iterator over JSON objects from a stream, targeting a nested path if provided.
+    """
+    if nested_path:
+        # Stream items from a nested array, e.g., 'data.records.item'
+        path_prefix = f"{nested_path}.item"
+        print(f"Streaming from nested path: {path_prefix}")
+        return ijson.items(stream, path_prefix)
+    
+    # Check the first character to determine if it's a root array or object
+    first_bytes = stream.read(1024)
+    if not first_bytes:
+        return iter([]) # Empty file
+        
+    start_char = first_bytes.decode('utf-8', errors='ignore').lstrip()[0]
+    
+    # We need a way to "chain" the first bytes back to the stream
+    import itertools
+    combined_stream = itertools.chain(iter([first_bytes]), stream)
+
+    if start_char == '[':
+        print("Detected root JSON array. Streaming items.")
+        return ijson.items(combined_stream, 'item')
+    elif start_char == '{':
+        print("Detected root JSON object. Attempting to find and stream the first array.")
+        # This is a heuristic: find the first major array and stream its items.
+        # This may need adjustment based on the actual JSON structure.
+        try:
+            # Using a low-level parser to find the first array to stream
+            parser = ijson.parse(combined_stream)
+            for prefix, event, _ in parser:
+                if event == 'start_array':
+                    # We found an array, now stream its items
+                    # The prefix tells us where the array is.
+                    return ijson.items(combined_stream, f"{prefix}.item")
+        except Exception as e:
+            print(f"Could not stream from root object, treating as single document. Error: {e}")
+            # Fallback for single object: wrap it in a list to make it iterable
+            stream.seek(0)
+            return iter([json.load(stream)])
+    
+    raise ValueError(f"Unsupported JSON structure starting with character: {start_char}")
+
 
 def main():
+    """Main function to orchestrate the JSON to CSV conversion."""
     args = parse_args()
-    connection_string = args.AZURE_STORAGE_CONNECTION_STRING
-    input_container = args.INPUT_CONTAINER_NAME
-    input_blob_path = args.INPUT_BLOB_PATH_PREFIX
-    output_container = args.OUTPUT_CONTAINER_NAME
-    output_path_prefix = args.OUTPUT_BLOB_PATH_PREFIX
-    nested_path = args.NESTED_PATH
+    
+    blob_service = BlobServiceClient.from_connection_string(args.AZURE_STORAGE_CONNECTION_STRING)
+    input_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=args.INPUT_BLOB_PATH_PREFIX)
 
-    blob_service = BlobServiceClient.from_connection_string(connection_string)
-    blob_client = blob_service.get_blob_client(container=input_container, blob=input_blob_path)
+    print(f"Downloading and processing blob: {input_blob_client.blob_name}")
+    with input_blob_client.download_blob() as stream:
+        # Get an iterator that yields JSON objects from the source file
+        json_iterator = get_json_iterator(stream, args.NESTED_PATH)
+        
+        # Create a processing pipeline using generators
+        flattened_iterator = (flatten_json(obj) for obj in json_iterator)
+        expanded_row_iterator = (row for flat_row in flattened_iterator for row in expand_rows_generator(flat_row))
+        
+        # Define output path
+        base_name = os.path.splitext(os.path.basename(args.INPUT_BLOB_PATH_PREFIX))[0]
+        nested_part = sanitize_filename(args.NESTED_PATH) if args.NESTED_PATH else ""
+        csv_filename = f"{base_name}{'_' + nested_part if nested_part else ''}.csv"
+        output_path = os.path.join(args.OUTPUT_BLOB_PATH_PREFIX, csv_filename)
+        
+        output_blob_client = blob_service.get_blob_client(container=args.OUTPUT_CONTAINER_NAME, blob=output_path)
+        
+        # Stream the processed rows directly to the output CSV blob
+        num_rows, headers = upload_csv_stream(output_blob_client, expanded_row_iterator)
 
-    stream = blob_client.download_blob()
-    first_byte = stream.read(1)
-    if not first_byte:
-        print("Blob is empty.")
-        return
-
-    full_stream = BytesIO(first_byte + stream.readall())
-    full_stream.seek(0)
-    start_char = first_byte.decode('utf-8').strip()
-
-    if nested_path:
-        full_stream.seek(0)
-        raw_data = json.load(full_stream)
-        nested_rows = extract_nested_rows(raw_data, nested_path)
-        if not nested_rows:
-            print(f"No valid nested rows found at path: {nested_path}")
-            return
-
-        reference_keys = list(flatten_json(raw_data).keys())
-        headers = build_ordered_headers(nested_rows, reference_keys)
-        base_name = os.path.splitext(os.path.basename(input_blob_path))[0]
-        nested_part = sanitize_filename(nested_path)
-        csv_filename = f"{base_name}_{nested_part}.csv"
-        output_path = os.path.join(output_path_prefix, csv_filename)
-        write_csv_blob(blob_service, output_container, output_path, headers, nested_rows)
-
-    elif start_char == '[':
-        flat_rows = []
-        reference_keys = []
-        headers = []
-        base_filename = os.path.splitext(os.path.basename(input_blob_path))[0]
-        csv_filename = base_filename + ".csv"
-        output_path = os.path.join(output_path_prefix, csv_filename)
-
-        output_stream = StringIO()
-        first = True
-        for item in ijson.items(full_stream, 'item'):
-            flat = flatten_json(item)
-            if first:
-                reference_keys = list(flat.keys())
-                headers = build_ordered_headers([flat])
-                output_stream.write(','.join([f'"{h}"' for h in headers]) + '\n')
-                first = False
-            escaped_row = ','.join([escape_csv_value(flat.get(h, "")) for h in headers])
-            output_stream.write(escaped_row + '\n')
-
-        output_stream.seek(0)
-        blob_client = blob_service.get_blob_client(container=output_container, blob=output_path)
-        blob_client.upload_blob(output_stream.getvalue().encode('utf-8'), overwrite=True)
-        print(f"Wrote CSV: {output_path} with {len(headers)} columns.")
-
-    elif start_char == '{':
-        full_stream.seek(0)
-        raw_data = json.load(full_stream)
-        records = []
-        for v in raw_data.values():
-            if isinstance(v, list):
-                records = v
-                break
-        if not records:
-            records = [raw_data]
-
-        flat_rows = []
-        reference_keys = list(flatten_json(records[0]).keys()) if records else []
-        for record in records:
-            flat = flatten_json(record)
-            expanded = expand_rows(flat)
-            flat_rows.extend(expanded)
-
-        if not flat_rows:
-            print("No valid rows found.")
-            return
-
-        headers = build_ordered_headers(flat_rows, reference_keys)
-        base_filename = os.path.splitext(os.path.basename(input_blob_path))[0]
-        csv_filename = base_filename + ".csv"
-        output_path = os.path.join(output_path_prefix, csv_filename)
-        write_csv_blob(blob_service, output_container, output_path, headers, flat_rows)
-
-    else:
-        print(f"Unexpected first character in JSON: {start_char}")
+        if num_rows > 0:
+            print(f"✅ Successfully wrote {num_rows} rows and {len(headers)} columns to: {output_path}")
+        else:
+            print("No data was written.")
 
 if __name__ == "__main__":
     main()
