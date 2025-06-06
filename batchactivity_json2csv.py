@@ -176,29 +176,30 @@ def main():
     input_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=args.INPUT_BLOB_PATH_PREFIX)
 
     print(f"Downloading and processing blob: {input_blob_client.blob_name}")
-    with input_blob_client.download_blob() as stream:
-        # Get an iterator that yields JSON objects from the source file
-        json_iterator = get_json_iterator(stream, args.NESTED_PATH)
-        
-        # Create a processing pipeline using generators
-        flattened_iterator = (flatten_json(obj) for obj in json_iterator)
-        expanded_row_iterator = (row for flat_row in flattened_iterator for row in expand_rows_generator(flat_row))
-        
-        # Define output path
-        base_name = os.path.splitext(os.path.basename(args.INPUT_BLOB_PATH_PREFIX))[0]
-        nested_part = sanitize_filename(args.NESTED_PATH) if args.NESTED_PATH else ""
-        csv_filename = f"{base_name}{'_' + nested_part if nested_part else ''}.csv"
-        output_path = os.path.join(args.OUTPUT_BLOB_PATH_PREFIX, csv_filename)
-        
-        output_blob_client = blob_service.get_blob_client(container=args.OUTPUT_CONTAINER_NAME, blob=output_path)
-        
-        # Stream the processed rows directly to the output CSV blob
-        num_rows, headers = upload_csv_stream(output_blob_client, expanded_row_iterator)
+    
+    blob_data = input_blob_client.download_blob().readall()
+    stream = BytesIO(blob_data)
 
-        if num_rows > 0:
-            print(f"✅ Successfully wrote {num_rows} rows and {len(headers)} columns to: {output_path}")
-        else:
-            print("No data was written.")
-
+    # Get an iterator that yields JSON objects from the source file
+    json_iterator = get_json_iterator(stream, args.NESTED_PATH)
+    
+    # Create a processing pipeline using generators
+    flattened_iterator = (flatten_json(obj) for obj in json_iterator)
+    expanded_row_iterator = (row for flat_row in flattened_iterator for row in expand_rows_generator(flat_row))
+    
+    # Define output path
+    base_name = os.path.splitext(os.path.basename(args.INPUT_BLOB_PATH_PREFIX))[0]
+    nested_part = sanitize_filename(args.NESTED_PATH) if args.NESTED_PATH else ""
+    csv_filename = f"{base_name}{'_' + nested_part if nested_part else ''}.csv"
+    output_path = os.path.join(args.OUTPUT_BLOB_PATH_PREFIX, csv_filename)
+    
+    output_blob_client = blob_service.get_blob_client(container=args.OUTPUT_CONTAINER_NAME, blob=output_path)
+    
+    # Stream the processed rows directly to the output CSV blob
+    num_rows, headers = upload_csv_stream(output_blob_client, expanded_row_iterator)
+    if num_rows > 0:
+        print(f"✅ Successfully wrote {num_rows} rows and {len(headers)} columns to: {output_path}")
+    else:
+        print("No data was written.")
 if __name__ == "__main__":
     main()
