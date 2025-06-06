@@ -75,8 +75,7 @@ def escape_csv_value(value: Any) -> str:
 
 def upload_csv_stream(blob_client: Any, row_iterator: Iterator[Dict[str, Any]]):
     """
-    Streams rows to a CSV file in Azure Blob Storage.
-    It determines headers from the first row and writes data in chunks.
+    Streams rows to a CSV file in Azure Blob Storage using BytesIO buffer to avoid memory issues.
     """
     try:
         first_row = next(row_iterator)
@@ -85,41 +84,30 @@ def upload_csv_stream(blob_client: Any, row_iterator: Iterator[Dict[str, Any]]):
         return 0, []
 
     headers = list(first_row.keys())
-    
-    def data_generator() -> Generator[bytes, None, None]:
-        # Yield header row first
-        yield (','.join(map(escape_csv_value, headers)) + '\n').encode('utf-8')
-        
-        # Yield the first row's data
-        yield (','.join(escape_csv_value(first_row.get(h)) for h in headers) + '\n').encode('utf-8')
-        
-        # Yield remaining rows
-        count = 1
-        for row in row_iterator:
-            # Ensure all headers are present, filling missing ones with empty string
-            yield (','.join(escape_csv_value(row.get(h)) for h in headers) + '\n').encode('utf-8')
-            count += 1
-        
-        # This print statement is for demonstration; it will execute after the generator is consumed.
-        # The actual count should be tracked outside.
-    
+    buffer = BytesIO()
     row_count = 0
-    # Use a wrapper to count the rows as they are generated
-    def counting_generator_wrapper():
-        nonlocal row_count
-        gen = data_generator()
-        # count header
-        yield next(gen) 
-        # count data rows
-        for data in gen:
-            row_count +=1
-            yield data
 
+    def write_row(row: Dict[str, Any]):
+        nonlocal buffer
+        line = ','.join(escape_csv_value(row.get(h)) for h in headers) + '\n'
+        buffer.write(line.encode('utf-8'))
+
+    # Write header
+    buffer.write((','.join(map(escape_csv_value, headers)) + '\n').encode('utf-8'))
+    write_row(first_row)
+    row_count = 1
+
+    # Write remaining rows
+    for row in row_iterator:
+        write_row(row)
+        row_count += 1
+
+    buffer.seek(0)
     print(f"Starting upload to {blob_client.blob_name}...")
-    blob_client.upload_blob(counting_generator_wrapper(), overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
-    
-    return row_count + 1, headers # Add 1 for the first row processed
 
+    blob_client.upload_blob(buffer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+
+    return row_count, headers
 
 # ---------- MAIN LOGIC ----------
 
