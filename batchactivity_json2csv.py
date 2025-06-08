@@ -4,8 +4,16 @@ import argparse
 import json
 from typing import Any, Dict, List, Iterator, Generator, Tuple
 from azure.storage.blob import BlobServiceClient, ContentSettings
-from io import BytesIO,BufferedReader,RawIOBase
+from io import BytesIO, BufferedReader, RawIOBase
 import ijson
+import itertools
+
+# Recommended: Use the faster C backend if available
+try:
+    import ijson.backends.c_yajl2 as ijson_backend
+except ImportError:
+    import ijson.backends.python as ijson_backend
+    print("Warning: C backend for ijson not found. Falling back to slower Python backend.")
 
 def parse_args():
     """Parses command-line arguments."""
@@ -42,6 +50,7 @@ def expand_rows_generator(row: Dict[str, Any]) -> Generator[Dict[str, Any], None
     Expands a single row into multiple rows if it contains lists of dictionaries.
     This is a generator to keep memory usage low.
     """
+    # Separate items that are lists of dicts from other items
     base_row = {k: v for k, v in row.items() if not (isinstance(v, list) and v and isinstance(v[0], dict))}
     list_of_dicts_to_expand = {k: v for k, v in row.items() if isinstance(v, list) and v and isinstance(v[0], dict)}
 
@@ -49,16 +58,33 @@ def expand_rows_generator(row: Dict[str, Any]) -> Generator[Dict[str, Any], None
         yield base_row
         return
 
-    # Iteratively expand one list of dicts at a time
-    current_key = next(iter(list_of_dicts_to_expand))
-    remaining_items = {k:v for k,v in list_of_dicts_to_expand.items() if k != current_key}
-    
-    for item in list_of_dicts_to_expand[current_key]:
-        new_row = base_row.copy()
-        new_row.update(flatten_json(item, f"{current_key}{'_'}"))
-        new_row.update(remaining_items)
-        # Recursively expand other lists
-        yield from expand_rows_generator(new_row)
+    # Use a queue for iterative expansion instead of direct recursion
+    # Each element in the queue is a (partially_expanded_row, remaining_lists_to_expand) tuple
+    queue = [(base_row, list_of_dicts_to_expand)]
+
+    while queue:
+        current_base, current_lists = queue.pop(0) # Pop from the left to process breadth-first (or just pick one)
+
+        if not current_lists:
+            yield current_base
+            continue
+
+        # Get the first list to expand
+        first_list_key = next(iter(current_lists))
+        list_to_process = current_lists[first_list_key]
+        remaining_lists = {k: v for k, v in current_lists.items() if k != first_list_key}
+
+        for item_in_list in list_to_process:
+            new_row_part = flatten_json(item_in_list, f"{first_list_key}{'_'}")
+            
+            combined_row = current_base.copy()
+            combined_row.update(new_row_part)
+
+            # If there are more lists to expand, add to queue
+            if remaining_lists:
+                queue.append((combined_row, remaining_lists.copy()))
+            else:
+                yield combined_row
 
 
 def sanitize_filename(filename: str) -> str:
@@ -73,115 +99,55 @@ def escape_csv_value(value: Any) -> str:
     s_val = str(value).replace('"', '""')
     return f'"{s_val}"'
 
-def upload_csv_stream(blob_client: Any, row_iterator: Iterator[Dict[str, Any]]):
+class CsvStreamer(RawIOBase):
     """
-    Streams rows to a CSV file in Azure Blob Storage using BytesIO buffer to avoid memory issues.
+    A file-like object that generates CSV data on the fly.
+    It takes an iterator of dictionaries and yields byte chunks for CSV.
     """
-    try:
-        first_row = next(row_iterator)
-    except StopIteration:
-        print("Warning: JSON stream was empty, no CSV file created.")
-        return 0, []
-
-    headers = list(first_row.keys())
-    buffer = BytesIO()
-    row_count = 0
-
-    def write_row(row: Dict[str, Any]):
-        nonlocal buffer
-        line = ','.join(escape_csv_value(row.get(h)) for h in headers) + '\n'
-        buffer.write(line.encode('utf-8'))
-
-    # Write header
-    buffer.write((','.join(map(escape_csv_value, headers)) + '\n').encode('utf-8'))
-    write_row(first_row)
-    row_count = 1
-
-    # Write remaining rows
-    for row in row_iterator:
-        write_row(row)
-        row_count += 1
-
-    buffer.seek(0)
-    print(f"Starting upload to {blob_client.blob_name}...")
-
-    blob_client.upload_blob(buffer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
-
-    return row_count, headers
-
-# ---------- MAIN LOGIC ----------
-
-def get_json_iterator(stream: Any, nested_path: str) -> Iterator[Dict]:
-    """
-    Returns an iterator over JSON objects from a stream, targeting a nested path if provided.
-    """
-    if nested_path:
-        # Stream items from a nested array, e.g., 'data.records.item'
-        path_prefix = f"{nested_path}.item"
-        print(f"Streaming from nested path: {path_prefix}")
-        return ijson.items(stream, path_prefix)
-    
-    # Check the first character to determine if it's a root array or object
-    first_bytes = stream.read(1024)
-    if not first_bytes:
-        return iter([]) # Empty file
-        
-    start_char = first_bytes.decode('utf-8', errors='ignore').lstrip()[0]
-    
-    # We need a way to "chain" the first bytes back to the stream
-    import itertools
-    combined_stream = itertools.chain(iter([first_bytes]), stream)
-
-    if start_char == '[':
-        print("Detected root JSON array. Streaming items.")
-        return ijson.items(combined_stream, 'item')
-    elif start_char == '{':
-        print("Detected root JSON object. Attempting to find and stream the first array.")
-        # This is a heuristic: find the first major array and stream its items.
-        # This may need adjustment based on the actual JSON structure.
-        try:
-            # Using a low-level parser to find the first array to stream
-            parser = ijson.parse(combined_stream)
-            for prefix, event, _ in parser:
-                if event == 'start_array':
-                    # We found an array, now stream its items
-                    # The prefix tells us where the array is.
-                    return ijson.items(combined_stream, f"{prefix}.item")
-        except Exception as e:
-            print(f"Could not stream from root object, treating as single document. Error: {e}")
-            # Fallback for single object: wrap it in a list to make it iterable
-            stream.seek(0)
-            return iter([json.load(stream)])
-    
-    raise ValueError(f"Unsupported JSON structure starting with character: {start_char}")
-
-
-
-class ChunkStream(RawIOBase):
-    def __init__(self, chunks):
-        self.chunks = iter(chunks)
-        self.buffer = b""
+    def __init__(self, row_iterator: Iterator[Dict[str, Any]], headers: List[str]):
+        self.row_iterator = row_iterator
+        self.headers = headers
+        self._buffer = BytesIO()
+        self._write_header = True
+        self._row_count = 0
 
     def readable(self):
         return True
 
+    def _write_to_internal_buffer(self):
+        """Writes the next chunk of CSV data to the internal BytesIO buffer."""
+        if self._write_header:
+            header_line = (','.join(map(escape_csv_value, self.headers)) + '\n').encode('utf-8')
+            self._buffer.write(header_line)
+            self._write_header = False
+
+        try:
+            row = next(self.row_iterator)
+            line = ','.join(escape_csv_value(row.get(h)) for h in self.headers) + '\n'
+            self._buffer.write(line.encode('utf-8'))
+            self._row_count += 1
+        except StopIteration:
+            pass # No more rows
+
     def read(self, n=-1):
-        if n == -1:
-            # Read all remaining chunks
-            return b"".join(self.chunks)
+        """Reads up to n bytes from the stream."""
+        if self._buffer.tell() == self._buffer.getbuffer().nbytes: # If buffer is empty or fully consumed
+            self._buffer = BytesIO() # Reset buffer
+            self._write_to_internal_buffer()
+            if self._buffer.tell() == 0: # If nothing was written to buffer, means iterator is exhausted
+                return b'' # End of stream
 
-        while len(self.buffer) < n:
-            try:
-                self.buffer += next(self.chunks)
-            except StopIteration:
-                break
+        # Read from internal buffer
+        self._buffer.seek(0)
+        chunk = self._buffer.read(n if n != -1 else self._buffer.getbuffer().nbytes)
+        # Shift remaining data to the beginning of the buffer for next read
+        remaining = self._buffer.read()
+        self._buffer = BytesIO(remaining)
+        return chunk
+    
+    def get_row_count(self):
+        return self._row_count
 
-        result, self.buffer = self.buffer[:n], self.buffer[n:]
-        return result
-
-    def close(self):
-        super().close()
-        
 def main():
     """Main function to orchestrate the JSON to CSV conversion."""
     args = parse_args()
@@ -190,23 +156,37 @@ def main():
     input_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=args.INPUT_BLOB_PATH_PREFIX)
 
     print(f"Downloading and processing blob: {input_blob_client.blob_name}")
-
-
     
+    # Get the blob input stream directly. download_blob() returns a BlobStream object
+    # which is a file-like object that reads chunks on demand.
     download_stream = input_blob_client.download_blob()
-    
-    # ijson can consume raw iterables of bytes if wrapped properly
-    import ijson.backends.python as ijson_backend  
-    
-    stream = ChunkStream(download_stream.chunks())
 
-    json_iterator = ijson_backend.items(stream, f'{args.NESTED_PATH}.item' if args.NESTED_PATH else 'item')
+    # Determine the ijson path based on NESTED_PATH
+    ijson_path = f'{args.NESTED_PATH}.item' if args.NESTED_PATH else 'item'
     
+    # Use ijson_backend.items directly with the download_stream
+    # This is highly memory-efficient as ijson pulls data as needed.
+    print(f"Streaming JSON items from path: {ijson_path}")
+    json_iterator = ijson_backend.items(download_stream, ijson_path)
     
     # Create a processing pipeline using generators
+    # Flattening
     flattened_iterator = (flatten_json(obj) for obj in json_iterator)
+    # Expanding rows that contain lists of dictionaries
     expanded_row_iterator = (row for flat_row in flattened_iterator for row in expand_rows_generator(flat_row))
     
+    # Get the first row to determine headers, but don't hold the whole iterator
+    try:
+        first_row = next(expanded_row_iterator)
+        headers = list(first_row.keys())
+    except StopIteration:
+        print("Warning: JSON stream was empty, no CSV file created.")
+        return
+
+    # Chain the first row back to the iterator for the CSV streamer
+    # This is crucial for not losing the first row after extracting headers.
+    full_row_iterator = itertools.chain([first_row], expanded_row_iterator)
+
     # Define output path
     base_name = os.path.splitext(os.path.basename(args.INPUT_BLOB_PATH_PREFIX))[0]
     nested_part = sanitize_filename(args.NESTED_PATH) if args.NESTED_PATH else ""
@@ -215,12 +195,20 @@ def main():
     
     output_blob_client = blob_service.get_blob_client(container=args.OUTPUT_CONTAINER_NAME, blob=output_path)
     
-    # Stream the processed rows directly to the output CSV blob
-    num_rows, headers = upload_csv_stream(output_blob_client, expanded_row_iterator)
+    print(f"Starting upload to {output_blob_client.blob_name}...")
+
+    # Create an instance of our streaming CSV writer
+    csv_streamer = CsvStreamer(full_row_iterator, headers)
+
+    # Upload the CSV data directly from the CsvStreamer
+    # The Azure SDK will read chunks from csv_streamer as it uploads.
+    output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+    
+    num_rows = csv_streamer.get_row_count()
     if num_rows > 0:
         print(f"✅ Successfully wrote {num_rows} rows and {len(headers)} columns to: {output_path}")
     else:
         print("No data was written.")
-        
+            
 if __name__ == "__main__":
     main()
