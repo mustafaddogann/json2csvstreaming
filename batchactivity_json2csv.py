@@ -4,7 +4,7 @@ import argparse
 import json
 from typing import Any, Dict, List, Iterator, Generator, Tuple
 from azure.storage.blob import BlobServiceClient, ContentSettings
-from io import BytesIO
+from io import BytesIO,BufferedReader,RawIOBase
 import ijson
 
 def parse_args():
@@ -156,6 +156,32 @@ def get_json_iterator(stream: Any, nested_path: str) -> Iterator[Dict]:
     raise ValueError(f"Unsupported JSON structure starting with character: {start_char}")
 
 
+
+class ChunkStream(RawIOBase):
+    def __init__(self, chunks):
+        self.chunks = iter(chunks)
+        self.buffer = b""
+
+    def readable(self):
+        return True
+
+    def read(self, n=-1):
+        if n == -1:
+            # Read all remaining chunks
+            return b"".join(self.chunks)
+
+        while len(self.buffer) < n:
+            try:
+                self.buffer += next(self.chunks)
+            except StopIteration:
+                break
+
+        result, self.buffer = self.buffer[:n], self.buffer[n:]
+        return result
+
+    def close(self):
+        super().close()
+        
 def main():
     """Main function to orchestrate the JSON to CSV conversion."""
     args = parse_args()
@@ -164,12 +190,18 @@ def main():
     input_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=args.INPUT_BLOB_PATH_PREFIX)
 
     print(f"Downloading and processing blob: {input_blob_client.blob_name}")
-    
-    blob_data = input_blob_client.download_blob().readall()
-    stream = BytesIO(blob_data)
 
-    # Get an iterator that yields JSON objects from the source file
-    json_iterator = get_json_iterator(stream, args.NESTED_PATH)
+
+    
+    download_stream = input_blob_client.download_blob()
+    
+    # ijson can consume raw iterables of bytes if wrapped properly
+    import ijson.backends.python as ijson_backend  
+    
+    stream = ChunkStream(download_stream.chunks())
+
+    json_iterator = ijson_backend.items(stream, f'{args.NESTED_PATH}.item' if args.NESTED_PATH else 'item')
+    
     
     # Create a processing pipeline using generators
     flattened_iterator = (flatten_json(obj) for obj in json_iterator)
@@ -189,5 +221,6 @@ def main():
         print(f"✅ Successfully wrote {num_rows} rows and {len(headers)} columns to: {output_path}")
     else:
         print("No data was written.")
+        
 if __name__ == "__main__":
     main()
