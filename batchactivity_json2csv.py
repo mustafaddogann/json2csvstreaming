@@ -47,44 +47,29 @@ def flatten_json(y: Any, parent_key: str = '', sep: str = '_') -> Dict[str, Any]
 
 def expand_rows_generator(row: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
     """
-    Expands a single row into multiple rows if it contains lists of dictionaries.
-    This is a generator to keep memory usage low.
+    Expands only the first list-of-dicts field in a row into multiple rows.
+    All other lists (simple or nested) are serialized into strings.
+    Prevents Cartesian explosion by not cross-joining multiple lists.
     """
-    # Separate items that are lists of dicts from other items
-    base_row = {k: v for k, v in row.items() if not (isinstance(v, list) and v and isinstance(v[0], dict))}
-    list_of_dicts_to_expand = {k: v for k, v in row.items() if isinstance(v, list) and v and isinstance(v[0], dict)}
+    base_row = {}
+    expandable_list_key = None
+    expandable_list = []
 
-    if not list_of_dicts_to_expand:
+    for k, v in row.items():
+        if isinstance(v, list) and v and isinstance(v[0], dict) and expandable_list_key is None:
+            expandable_list_key = k
+            expandable_list = v
+        else:
+            base_row[k] = json.dumps(v) if isinstance(v, list) else v
+
+    if expandable_list_key is None:
         yield base_row
-        return
-
-    # Use a queue for iterative expansion instead of direct recursion
-    # Each element in the queue is a (partially_expanded_row, remaining_lists_to_expand) tuple
-    queue = [(base_row, list_of_dicts_to_expand)]
-
-    while queue:
-        current_base, current_lists = queue.pop(0) # Pop from the left to process breadth-first (or just pick one)
-
-        if not current_lists:
-            yield current_base
-            continue
-
-        # Get the first list to expand
-        first_list_key = next(iter(current_lists))
-        list_to_process = current_lists[first_list_key]
-        remaining_lists = {k: v for k, v in current_lists.items() if k != first_list_key}
-
-        for item_in_list in list_to_process:
-            new_row_part = flatten_json(item_in_list, f"{first_list_key}{'_'}")
-            
-            combined_row = current_base.copy()
-            combined_row.update(new_row_part)
-
-            # If there are more lists to expand, add to queue
-            if remaining_lists:
-                queue.append((combined_row, remaining_lists.copy()))
-            else:
-                yield combined_row
+    else:
+        for item in expandable_list:
+            new_row = base_row.copy()
+            flat = flatten_json(item, parent_key=f"{expandable_list_key}_")
+            new_row.update(flat)
+            yield new_row
 
 
 def sanitize_filename(filename: str) -> str:
@@ -170,10 +155,18 @@ def main():
     json_iterator = ijson_backend.items(download_stream, ijson_path)
     
     # Create a processing pipeline using generators
-    # Flattening
-    flattened_iterator = (flatten_json(obj) for obj in json_iterator)
-    # Expanding rows that contain lists of dictionaries
-    expanded_row_iterator = (row for flat_row in flattened_iterator for row in expand_rows_generator(flat_row))
+     # Flatten and expand only top-level list-of-dict fields (no cross-joins)
+    def expanded_generator():
+        row_count = 0
+        for obj in json_iterator:
+            for row in expand_rows_generator(flatten_json(obj)):
+                row_count += 1
+                if row_count % 10000 == 0:
+                    print(f"Processed {row_count} rows...")
+                yield row
+
+    expanded_row_iterator = expanded_generator()
+
     
     # Get the first row to determine headers, but don't hold the whole iterator
     try:
