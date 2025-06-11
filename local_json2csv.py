@@ -81,6 +81,20 @@ def escape_csv_value(value: Any) -> str:
     return s_value # No quotes needed if no special characters
 
 def main():
+    import sys
+    print("--- AZURE BATCH DIAGNOSTICS ---")
+    print(f"Current Working Directory: {os.getcwd()}")
+    try:
+        print(f"CWD Contents: {os.listdir('.')}")
+    except Exception as e:
+        print(f"Could not list CWD: {e}")
+    print("System Path:")
+    for p in sys.path:
+        print(f"  - {p}")
+    print(f"Python Executable: {sys.executable}")
+    print(f"Python Version: {sys.version}")
+    print("--- END DIAGNOSTICS ---")
+
     args = parse_args()
     ijson_path = f'{args.nested_path}.item' if args.nested_path else 'item'
 
