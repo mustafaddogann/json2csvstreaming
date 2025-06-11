@@ -11,14 +11,17 @@ try:
     packages_dir = os.path.join(app_dir, 'packages')
     if os.path.isdir(packages_dir):
         sys.path.insert(0, packages_dir)
+        # Also add to the system PATH so it can find DLLs
+        os.environ["PATH"] = packages_dir + os.pathsep + os.environ["PATH"]
 except Exception:
     # This is a fallback for local execution, etc.
     # Assumes 'packages' is in the CWD or a sub-directory.
-    # This might not be robust, but it's better than nothing.
     cwd = os.getcwd()
     packages_dir = os.path.join(cwd, 'packages')
     if os.path.isdir(packages_dir) and packages_dir not in sys.path:
          sys.path.insert(0, packages_dir)
+         # Also add to the system PATH so it can find DLLs
+         os.environ["PATH"] = packages_dir + os.pathsep + os.environ["PATH"]
 
 import re
 import json
