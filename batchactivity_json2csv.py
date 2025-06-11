@@ -15,10 +15,15 @@ import itertools
 
 # Recommended: Use the faster C backend if available
 try:
-    import ijson.backends.yajl2_c as ijson_backend
+    import ijson.backends.yajl2_cffi as ijson_backend
+    print("Using yajl2_cffi ijson backend.")
 except ImportError:
-    import ijson.backends.python as ijson_backend
-    print("Warning: C backend for ijson not found. Falling back to slower Python backend.")
+    try:
+        import ijson.backends.yajl2_c as ijson_backend
+        print("Using yajl2_c ijson backend.")
+    except ImportError:
+        import ijson.backends.python as ijson_backend
+        print("Warning: C backend for ijson not found. Falling back to slower Python backend.")
 
 def parse_args():
     """Parses command-line arguments."""
