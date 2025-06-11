@@ -64,6 +64,37 @@ def main():
         print(f"Error installing dependencies: {e}")
         sys.exit(1)
 
+    # 3a. Verify ijson C backend is present and find dependencies
+    print("\nVerifying ijson C backend...")
+    ijson_backend_dir = os.path.join(PACKAGE_DIR, "ijson", "backends")
+    pyd_file = None
+    if os.path.exists(ijson_backend_dir):
+        backend_files = os.listdir(ijson_backend_dir)
+        print(f"Files in {ijson_backend_dir}: {backend_files}")
+        for f in backend_files:
+            if f.endswith('.pyd'):
+                pyd_file = os.path.join(ijson_backend_dir, f)
+                print(f"  - SUCCESS: Found ijson C backend: {f}")
+                break
+        if not pyd_file:
+            print("  - WARNING: ijson C backend (.pyd file) NOT found.")
+    else:
+        print("  - WARNING: ijson/backends directory not found.")
+    
+    if pyd_file and sys.platform == "win32":
+        print("\nChecking for MSVC runtime dependencies...")
+        try:
+            # Use dumpbin to check for dependencies (requires Visual Studio tools)
+            result = subprocess.check_output(['dumpbin', '/dependents', pyd_file]).decode()
+            print(result)
+            if "VCRUNTIME140.dll" in result:
+                print("\n  >>> This package likely requires the 'Visual C++ 2015-2022 Redistributable'.")
+            else:
+                 print("\n  - Could not determine specific VC++ runtime. Please check dumpbin output.")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("\n  - Could not run 'dumpbin'. Skipping dependency check.")
+            print("  - Assuming 'Visual C++ 2015-2022 Redistributable' is required for the C backend to work on a clean Windows machine.")
+
     # 4. Create zip file
     print(f"\nCreating deployment archive: {OUTPUT_ZIP_FILE}.zip")
     shutil.make_archive(OUTPUT_ZIP_FILE, 'zip', BUILD_DIR)

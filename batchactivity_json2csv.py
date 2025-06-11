@@ -17,7 +17,7 @@ import itertools
 try:
     import ijson.backends.c_yajl2 as ijson_backend
 except ImportError:
-    import ijson.backends.python as ijson_backend
+    import ijson.backends.python as ijson_backend 
     print("Warning: C backend for ijson not found. Falling back to slower Python backend.")
 
 def parse_args():
@@ -210,3 +210,5 @@ def main():
             
 if __name__ == "__main__":
     main()
+
+    #powershell -Command "Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile vc_redist.x64.exe; Start-Process -FilePath .\\vc_redist.x64.exe -ArgumentList '/install', '/passive', '/norestart' -Wait; Remove-Item .\\vc_redist.x64.exe"
