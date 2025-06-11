@@ -1,5 +1,6 @@
 import os
 import sys
+import io
 
 # Add the 'packages' directory to sys.path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'packages'))
@@ -154,19 +155,15 @@ def main():
     blob_service = BlobServiceClient.from_connection_string(args.AZURE_STORAGE_CONNECTION_STRING)
     input_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=args.INPUT_BLOB_PATH_PREFIX)
 
-    print(f"Downloading and processing blob: {input_blob_client.blob_name}")
+    print(f"Starting download of {args.INPUT_BLOB_PATH_PREFIX}...")
+    stream_downloader = input_blob_client.download_blob()
     
-    # Get the blob input stream directly. download_blob() returns a BlobStream object
-    # which is a file-like object that reads chunks on demand.
-    download_stream = input_blob_client.download_blob()
-
-    # Determine the ijson path based on NESTED_PATH
-    ijson_path = f'{args.NESTED_PATH}.item' if args.NESTED_PATH else 'item'
+    print("Download complete. Reading into in-memory buffer before parsing.")
+    in_memory_stream = io.BytesIO(stream_downloader.readall())
     
-    # Use ijson_backend.items directly with the download_stream
-    # This is highly memory-efficient as ijson pulls data as needed.
-    print(f"Streaming JSON items from path: {ijson_path}")
-    json_iterator = ijson_backend.items(download_stream, ijson_path)
+    print("Parsing JSON from in-memory buffer...")
+    # Use the in-memory stream for ijson
+    json_iterator = ijson_backend.items(in_memory_stream, f'{args.NESTED_PATH}.item' if args.NESTED_PATH else 'item')
     
     # Create a processing pipeline using generators
      # Flatten and expand only top-level list-of-dict fields (no cross-joins)
