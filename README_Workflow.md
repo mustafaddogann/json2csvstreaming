@@ -61,7 +61,7 @@ Use these settings in your ADF dataset:
 
 1. **sas2csv.py** ensures consistent CSV formatting from the start
 2. **csvsplitter.py** maintains that formatting while splitting
-3. Both use the same quoting rules (QUOTE_MINIMAL)
+3. Both use the same quoting rules (QUOTE_ALL)
 4. NaN values are handled properly for ADF
 
 ## Customization

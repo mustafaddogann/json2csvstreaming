@@ -12,7 +12,7 @@ df = df.fillna('')
 df.to_csv(
     "client_t.csv",
     index=False,
-    quoting=csv.QUOTE_MINIMAL,    # Consistent with your splitter
+    quoting=csv.QUOTE_ALL,        # Match the splitter's QUOTE_ALL
     doublequote=True,             # Use "" to escape quotes (ADF standard)
     escapechar=None,              # Don't use escape character
     encoding='utf-8',             # UTF-8 encoding

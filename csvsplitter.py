@@ -17,7 +17,7 @@ def split_csv_by_size(input_csv_path, output_dir, max_bytes=100 * 1024 * 1024):
         chunk_number = 1
         chunk_path = os.path.join(output_dir, f'{base_filename}_{chunk_number}.csv')
         outfile = open(chunk_path, mode='w', newline='', encoding='utf-8')
-        writer = csv.writer(outfile, quoting=csv.QUOTE_MINIMAL)
+        writer = csv.writer(outfile, quoting=csv.QUOTE_ALL)
         writer.writerow(header)
         current_size = outfile.tell()
 
@@ -30,7 +30,7 @@ def split_csv_by_size(input_csv_path, output_dir, max_bytes=100 * 1024 * 1024):
                 chunk_number += 1
                 chunk_path = os.path.join(output_dir, f'{base_filename}_{chunk_number}.csv')
                 outfile = open(chunk_path, mode='w', newline='', encoding='utf-8')
-                writer = csv.writer(outfile, quoting=csv.QUOTE_MINIMAL)
+                writer = csv.writer(outfile, quoting=csv.QUOTE_ALL)
                 writer.writerow(header)
                 current_size = outfile.tell()
 
