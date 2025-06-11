@@ -33,7 +33,8 @@ import ijson
 
 # Try using C backend
 try:
-    import ijson.backends.c_yajl2 as ijson_backend
+    import ijson.backends.yajl2_c as ijson_backend
+    print("Successfully loaded ijson C backend (yajl2_c)")
 except ImportError as e:
     print(f"Failed to load C backend. Full error: {e}")
     import ijson.backends.python as ijson_backend
