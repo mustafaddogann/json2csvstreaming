@@ -1,18 +1,20 @@
 import os
 import sys
 import io
+import csv
+import json
+import logging
+import argparse
+import itertools
+import requests
+from datetime import datetime, timedelta
+from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
+from typing import Any, Dict, List, Iterator, Generator, Tuple
+import ijson
+import re
 
 # Add the 'packages' directory to sys.path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'packages'))
-
-import re
-import argparse
-import json
-from typing import Any, Dict, List, Iterator, Generator, Tuple
-from azure.storage.blob import BlobServiceClient, ContentSettings
-from io import BytesIO, BufferedReader, RawIOBase
-import ijson
-import itertools
 
 # Recommended: Use the faster C backend if available
 try:
@@ -148,72 +150,86 @@ def main():
     """
     Main function to orchestrate the JSON to CSV conversion process.
     """
-    print("--- Running script version 1.1: Force update ---")
+    print(f"--- Running script version 1.2: SAS Token Streaming ---")
     
     args = parse_args()
-    
-    blob_service = BlobServiceClient.from_connection_string(args.AZURE_STORAGE_CONNECTION_STRING)
-    input_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=args.INPUT_BLOB_PATH_PREFIX)
 
-    print(f"Starting download of {args.INPUT_BLOB_PATH_PREFIX}...")
-    stream_downloader = input_blob_client.download_blob()
-    
-    print("Download complete. Reading into in-memory buffer before parsing.")
-    in_memory_stream = io.BytesIO(stream_downloader.readall())
-    
-    print("Parsing JSON from in-memory buffer...")
-    # Use the in-memory stream for ijson
-    json_iterator = ijson_backend.items(in_memory_stream, f'{args.NESTED_PATH}.item' if args.NESTED_PATH else 'item')
-    
-    # Create a processing pipeline using generators
-     # Flatten and expand only top-level list-of-dict fields (no cross-joins)
-    def expanded_generator():
-        row_count = 0
-        for obj in json_iterator:
-            for row in expand_rows_generator(flatten_json(obj)):
-                row_count += 1
-                if row_count % 10000 == 0:
-                    print(f"Processed {row_count} rows...")
-                yield row
+    # Add the 'packages' directory to sys.path
+    packages_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'packages')
+    sys.path.insert(0, packages_path)
 
-    expanded_row_iterator = expanded_generator()
-
-    
-    # Get the first row to determine headers, but don't hold the whole iterator
     try:
-        first_row = next(expanded_row_iterator)
-        headers = list(first_row.keys())
-    except StopIteration:
-        print("Warning: JSON stream was empty, no CSV file created.")
-        return
+        blob_service = BlobServiceClient.from_connection_string(args.AZURE_STORAGE_CONNECTION_STRING)
+        input_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=args.INPUT_BLOB_PATH_PREFIX)
 
-    # Chain the first row back to the iterator for the CSV streamer
-    # This is crucial for not losing the first row after extracting headers.
-    full_row_iterator = itertools.chain([first_row], expanded_row_iterator)
+        # Generate a SAS token to stream the blob directly with the `requests` library.
+        # This bypasses a bug in the Azure SDK's streaming downloader and allows true streaming.
+        print("Generating SAS token for direct download.")
+        sas_token = generate_blob_sas(
+            account_name=input_blob_client.account_name,
+            container_name=input_blob_client.container_name,
+            blob_name=input_blob_client.blob_name,
+            account_key=blob_service.credential.account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.utcnow() + timedelta(hours=1)
+        )
+        blob_url_with_sas = f"{input_blob_client.url}?{sas_token}"
 
-    # Define output path
-    base_name = os.path.splitext(os.path.basename(args.INPUT_BLOB_PATH_PREFIX))[0]
-    nested_part = sanitize_filename(args.NESTED_PATH) if args.NESTED_PATH else ""
-    csv_filename = f"{base_name}{'_' + nested_part if nested_part else ''}.csv"
-    output_path = os.path.join(args.OUTPUT_BLOB_PATH_PREFIX, csv_filename)
-    
-    output_blob_client = blob_service.get_blob_client(container=args.OUTPUT_CONTAINER_NAME, blob=output_path)
-    
-    print(f"Starting upload to {output_blob_client.blob_name}...")
+        print(f"Streaming blob directly from URL using requests...")
+        with requests.get(blob_url_with_sas, stream=True) as r:
+            r.raise_for_status()
 
-    # Create an instance of our streaming CSV writer
-    csv_streamer = CsvStreamer(full_row_iterator, headers)
+            ijson_path = f'{args.NESTED_PATH}.item' if args.NESTED_PATH else 'item'
+            json_iterator = ijson_backend.items(r.raw, ijson_path)
 
-    # Upload the CSV data directly from the CsvStreamer
-    # The Azure SDK will read chunks from csv_streamer as it uploads.
-    output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
-    
-    num_rows = csv_streamer.get_row_count()
-    if num_rows > 0:
-        print(f"Successfully wrote {num_rows} rows and {len(headers)} columns to: {output_path}")
-    else:
-        print("No data was written.")
+            # Create a processing pipeline using generators
+            def expanded_generator():
+                for obj in json_iterator:
+                    # In this version, we only expand top-level list-of-dicts
+                    # More complex logic would be needed for deeper nesting or cross-products
+                    expanded_rows = [obj]
+                    list_fields_to_expand = {k for k, v in obj.items() if isinstance(v, list) and v and isinstance(v[0], dict)}
+
+                    if list_fields_to_expand:
+                        base_row = {k: v for k, v in obj.items() if k not in list_fields_to_expand}
+                        # Assumption: expand only the first found list-of-dicts field
+                        field_to_expand = list(list_fields_to_expand)[0]
+                        expanded_rows = [{**base_row, **sub_dict} for sub_dict in obj[field_to_expand]]
+                    
+                    for row in expanded_rows:
+                        yield row
+
+            expanded_row_iterator = expanded_generator()
+
+            try:
+                first_row = next(expanded_row_iterator)
+                headers = list(first_row.keys())
+            except StopIteration:
+                print("Warning: JSON stream was empty, no CSV file created.")
+                return
+
+            full_row_iterator = itertools.chain([first_row], expanded_row_iterator)
+
+            # Define output path
+            output_blob_name = os.path.basename(args.INPUT_BLOB_PATH_PREFIX).replace('.json', '.csv')
+            output_blob_path = os.path.join(os.path.dirname(args.INPUT_BLOB_PATH_PREFIX), output_blob_name)
             
+            # Create an instance of our streaming CSV writer
+            csv_streamer = CsvStreamer(full_row_iterator, headers)
+
+            # Upload the CSV data directly from the CsvStreamer
+            output_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=output_blob_path)
+            
+            print(f"Uploading processed CSV to: {output_blob_path}")
+            output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+            print("Upload complete.")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        # In a real-world scenario, you might want more specific error handling
+        # and possibly exit with a non-zero status code.
+        sys.exit(1)
+
 if __name__ == "__main__":
     main()
 
