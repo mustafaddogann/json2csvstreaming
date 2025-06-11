@@ -1,4 +1,25 @@
+import sys
 import os
+
+# This script is intended to be run from a .pyz file.
+# The 'packages' directory with dependencies should be located alongside the .pyz file.
+# We need to add this 'packages' directory to the path BEFORE any other imports.
+try:
+    # When running as a .pyz, sys.argv[0] is the path to the .pyz file.
+    app_path = os.path.abspath(sys.argv[0])
+    app_dir = os.path.dirname(app_path)
+    packages_dir = os.path.join(app_dir, 'packages')
+    if os.path.isdir(packages_dir):
+        sys.path.insert(0, packages_dir)
+except Exception:
+    # This is a fallback for local execution, etc.
+    # Assumes 'packages' is in the CWD or a sub-directory.
+    # This might not be robust, but it's better than nothing.
+    cwd = os.getcwd()
+    packages_dir = os.path.join(cwd, 'packages')
+    if os.path.isdir(packages_dir) and packages_dir not in sys.path:
+         sys.path.insert(0, packages_dir)
+
 import re
 import json
 import argparse
