@@ -1,5 +1,25 @@
 import os
 import sys
+
+# Add packages directory to path BEFORE any other imports
+# This script needs to find dependencies in the 'packages' directory
+try:
+    # When running from Azure Batch, find packages relative to script location
+    app_path = os.path.abspath(sys.argv[0])
+    app_dir = os.path.dirname(app_path)
+    packages_dir = os.path.join(app_dir, 'packages')
+    if os.path.isdir(packages_dir):
+        sys.path.insert(0, packages_dir)
+        # Also add to system PATH for DLLs
+        os.environ["PATH"] = packages_dir + os.pathsep + os.environ["PATH"]
+except Exception:
+    # Fallback for local execution
+    cwd = os.getcwd()
+    packages_dir = os.path.join(cwd, 'packages')
+    if os.path.isdir(packages_dir) and packages_dir not in sys.path:
+        sys.path.insert(0, packages_dir)
+        os.environ["PATH"] = packages_dir + os.pathsep + os.environ["PATH"]
+
 import io
 import csv
 import json
@@ -7,6 +27,7 @@ import logging
 import argparse
 import itertools
 import requests
+from io import BytesIO, RawIOBase
 from datetime import datetime, timedelta
 from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
 from typing import Any, Dict, List, Iterator, Generator, Tuple
