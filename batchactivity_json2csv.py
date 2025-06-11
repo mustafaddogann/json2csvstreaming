@@ -144,7 +144,11 @@ class CsvStreamer(RawIOBase):
         return self._row_count
 
 def main():
-    """Main function to orchestrate the JSON to CSV conversion."""
+    """
+    Main function to orchestrate the JSON to CSV conversion process.
+    """
+    print("--- Running script version 1.1: Force update ---")
+    
     args = parse_args()
     
     blob_service = BlobServiceClient.from_connection_string(args.AZURE_STORAGE_CONNECTION_STRING)
