@@ -34,7 +34,8 @@ import ijson
 # Try using C backend
 try:
     import ijson.backends.c_yajl2 as ijson_backend
-except ImportError:
+except ImportError as e:
+    print(f"Failed to load C backend. Full error: {e}")
     import ijson.backends.python as ijson_backend
     print("Falling back to slower Python backend.")
 
