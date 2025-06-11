@@ -206,7 +206,8 @@ def main():
             r.raise_for_status()
 
             ijson_path = f'{args.NESTED_PATH}.item' if args.NESTED_PATH else 'item'
-            json_iterator = ijson_backend.items(r.raw, ijson_path)
+            # Use 1MB buffer for better performance on dedicated nodes
+            json_iterator = ijson_backend.items(r.raw, ijson_path, buf_size=1024*1024)
 
             # Create a processing pipeline using generators
             def expanded_generator():
@@ -247,12 +248,16 @@ def main():
             output_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=output_blob_path)
             
             print(f"Uploading processed CSV to: {output_blob_path}")
+            upload_start = time.time()
             output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+            upload_end = time.time()
             print("Upload complete.")
             
             end_time = time.time()
+            print(f"Upload time: {upload_end - upload_start:.2f} seconds")
             print(f"Total processing time: {end_time - start_time:.2f} seconds")
             print(f"Rows processed: {csv_streamer.get_row_count()}")
+            print(f"Processing rate: {csv_streamer.get_row_count() / (end_time - start_time):.1f} rows/second")
 
     except Exception as e:
         print(f"An error occurred: {e}")
