@@ -13,9 +13,6 @@ from typing import Any, Dict, List, Iterator, Generator, Tuple
 import ijson
 import re
 
-# Add the 'packages' directory to sys.path
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'packages'))
-
 # Recommended: Use the faster C backend if available
 try:
     import ijson.backends.yajl2_cffi as ijson_backend
@@ -153,10 +150,6 @@ def main():
     print(f"--- Running script version 1.2: SAS Token Streaming ---")
     
     args = parse_args()
-
-    # Add the 'packages' directory to sys.path
-    packages_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'packages')
-    sys.path.insert(0, packages_path)
 
     try:
         blob_service = BlobServiceClient.from_connection_string(args.AZURE_STORAGE_CONNECTION_STRING)
