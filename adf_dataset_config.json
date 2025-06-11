@@ -1,0 +1,19 @@
+{
+    "name": "YourDatasetName",
+    "properties": {
+        "type": "DelimitedText",
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobStorageLocation",
+                "container": "your-container",
+                "folderPath": "your-folder"
+            },
+            "columnDelimiter": ",",
+            "rowDelimiter": "\n",
+            "encodingName": "UTF-8",
+            "escapeChar": "\"",
+            "quoteChar": "\"",
+            "firstRowAsHeader": true
+        }
+    }
+} 
