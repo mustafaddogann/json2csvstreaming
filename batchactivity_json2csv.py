@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 # Add packages directory to path BEFORE any other imports
 # This script needs to find dependencies in the 'packages' directory
@@ -38,13 +39,21 @@ import re
 try:
     import ijson.backends.yajl2_cffi as ijson_backend
     print("Using yajl2_cffi ijson backend.")
+    backend_name = "yajl2_cffi"
 except ImportError:
     try:
         import ijson.backends.yajl2_c as ijson_backend
         print("Using yajl2_c ijson backend.")
+        backend_name = "yajl2_c"
     except ImportError:
         import ijson.backends.python as ijson_backend
         print("Warning: C backend for ijson not found. Falling back to slower Python backend.")
+        backend_name = "python"
+
+# Print diagnostic info about the backend
+print(f"ijson backend module: {ijson_backend}")
+print(f"ijson backend name: {backend_name}")
+print(f"ijson backend file: {getattr(ijson_backend, '__file__', 'Unknown')}")
 
 def parse_args():
     """Parses command-line arguments."""
@@ -168,7 +177,10 @@ def main():
     """
     Main function to orchestrate the JSON to CSV conversion process.
     """
+    start_time = time.time()
+    
     print(f"--- Running script version 1.2: SAS Token Streaming ---")
+    print(f"Script started at: {datetime.now()}")
     
     args = parse_args()
 
@@ -237,6 +249,10 @@ def main():
             print(f"Uploading processed CSV to: {output_blob_path}")
             output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
             print("Upload complete.")
+            
+            end_time = time.time()
+            print(f"Total processing time: {end_time - start_time:.2f} seconds")
+            print(f"Rows processed: {csv_streamer.get_row_count()}")
 
     except Exception as e:
         print(f"An error occurred: {e}")
