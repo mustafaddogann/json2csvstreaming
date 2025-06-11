@@ -1,4 +1,9 @@
 import os
+import sys
+
+# Add the 'packages' directory to sys.path
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'packages'))
+
 import re
 import argparse
 import json

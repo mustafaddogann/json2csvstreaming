@@ -1,0 +1,7 @@
+# It is recommended to pin versions for stable, reproducible builds.
+# azure-storage-blob==12.19.0
+# ijson==3.2.3
+# or run 'pip freeze' in your environment to get the exact versions.
+
+azure-storage-blob
+ijson 
