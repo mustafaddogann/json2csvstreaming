@@ -12,7 +12,7 @@ try:
     import ijson.backends.c_yajl2 as ijson_backend
 except ImportError:
     import ijson.backends.python as ijson_backend
-    print("⚠️ Falling back to slower Python backend.")
+    print("Falling back to slower Python backend.")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Convert large local JSON to CSV")
@@ -84,7 +84,7 @@ def main():
     args = parse_args()
     ijson_path = f'{args.nested_path}.item' if args.nested_path else 'item'
 
-    print(f"📥 Reading from: {args.input_file}")
+    print(f"Reading from: {args.input_file}")
     
     # Open file here to ensure it's managed correctly
     with open(args.input_file, 'rb') as f:
@@ -104,7 +104,7 @@ def main():
             # Get the first row to determine headers
             first_row = next(expanded_rows_generator)
         except StopIteration:
-            print("⚠️ No data found in JSON path or max_records limit resulted in no data.")
+            print("No data found in JSON path or max_records limit resulted in no data.")
             return
 
         headers = list(first_row.keys())
@@ -112,7 +112,7 @@ def main():
         # Chain the first row back into the generator
         all_rows_for_csv = itertools.chain([first_row], expanded_rows_generator)
 
-        print(f"✍️ Writing to: {args.output_file}")
+        print(f"Writing to: {args.output_file}")
         with open(args.output_file, 'w', encoding='utf-8', newline='') as out_file:
             # Write header
             out_file.write(','.join(escape_csv_value(h) for h in headers) + '\n')
@@ -125,7 +125,7 @@ def main():
                 out_file.write(line)
                 row_count += 1
 
-        print(f"✅ Wrote {row_count} rows with {len(headers)} columns to {args.output_file}")
+        print(f"Wrote {row_count} rows with {len(headers)} columns to {args.output_file}")
 
 if __name__ == "__main__":
     main()

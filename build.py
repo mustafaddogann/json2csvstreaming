@@ -2,18 +2,11 @@ import os
 import shutil
 import subprocess
 import sys
+import glob
 
 # --- Configuration ---
 BUILD_DIR = "dist"
 PACKAGE_DIR = os.path.join(BUILD_DIR, "packages")
-SOURCE_FILES = [
-    "batchactivity_json2csv.py",
-    # "run.bat", # This is not used by the ADF Custom Activity
-    "batchaccounttest.py",
-    "hello_batch.py",
-    "json2csv1.py",
-    "local_json2csv.py",
-]
 REQUIREMENTS_FILE = "requirements.txt"
 OUTPUT_ZIP_FILE = "batch-script" # The .zip extension is added automatically
 
@@ -31,15 +24,26 @@ def main():
     print(f"Creating build directory: {BUILD_DIR}")
     os.makedirs(PACKAGE_DIR)
 
-    # 2. Copy source files
-    print("Copying source files...")
-    for file_name in SOURCE_FILES:
-        if os.path.exists(file_name):
-            shutil.copy(file_name, BUILD_DIR)
-            print(f"  - Copied {file_name}")
-        else:
-            print(f"  - Warning: {file_name} not found, skipping.")
+    # 2. Copy source files and Python runtime
+    print("Copying source files and Python runtime...")
+    
+    # Use glob to find all relevant files. This is more robust than a fixed list.
+    extensions_to_copy = ["*.py", "*.pyd", "*.dll", "*.exe", "*.cat", "*.zip", "*._pth", "*.bat"]
+    files_to_copy = []
+    for ext in extensions_to_copy:
+        files_to_copy.extend(glob.glob(ext))
 
+    # De-duplicate the list
+    files_to_copy = list(set(files_to_copy))
+
+    # Exclude the build script itself
+    if "build.py" in files_to_copy:
+        files_to_copy.remove("build.py")
+
+    for file_name in files_to_copy:
+        shutil.copy(file_name, BUILD_DIR)
+        print(f"  - Copied {file_name}")
+        
     # 3. Install packages
     print("\nInstalling dependencies from requirements.txt...")
     if not os.path.exists(REQUIREMENTS_FILE):
@@ -51,7 +55,9 @@ def main():
             sys.executable, "-m", "pip", "install",
             "--target", PACKAGE_DIR,
             "--requirement", REQUIREMENTS_FILE,
-            "--only-binary", ":all:"
+            "--only-binary", ":all:",
+            "--platform", "win_amd64",
+            "--python-version", "310"
         ])
         print("Dependencies installed successfully.")
     except subprocess.CalledProcessError as e:
