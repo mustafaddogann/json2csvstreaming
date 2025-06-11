@@ -77,7 +77,8 @@ def escape_csv_value(value: Any) -> str:
     s_value = str(value)
     # Check if value contains comma or double quote, then wrap in quotes and escape
     if ',' in s_value or '"' in s_value or '\n' in s_value: # Added newline for robustness
-        return f'"{s_value.replace("\"", "\"\"")}"'
+        escaped_value = s_value.replace('"', '""')
+        return f'"{escaped_value}"'
     return s_value # No quotes needed if no special characters
 
 def main():
