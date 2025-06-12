@@ -179,14 +179,23 @@ def main():
     """
     start_time = time.time()
     
-    print(f"--- Running script version 1.2: SAS Token Streaming ---")
+    print(f"--- Running script version 1.3: Chunked Output ---")
     print(f"Script started at: {datetime.now()}")
     
     args = parse_args()
 
+    # Define chunk size for output files (e.g., 250MB)
+    CHUNK_THRESHOLD_BYTES = 250 * 1024 * 1024
+
     try:
         blob_service = BlobServiceClient.from_connection_string(args.AZURE_STORAGE_CONNECTION_STRING)
         input_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=args.INPUT_BLOB_PATH_PREFIX)
+
+        # Get blob size to determine if we need to chunk
+        print("Getting input blob properties...")
+        blob_properties = input_blob_client.get_blob_properties()
+        input_blob_size = blob_properties.size
+        print(f"Input blob size: {input_blob_size / (1024*1024):.2f} MB")
 
         # Generate a SAS token to stream the blob directly with the `requests` library.
         # This bypasses a bug in the Azure SDK's streaming downloader and allows true streaming.
@@ -237,27 +246,77 @@ def main():
 
             full_row_iterator = itertools.chain([first_row], expanded_row_iterator)
 
-            # Define output path
-            output_blob_name = os.path.basename(args.INPUT_BLOB_PATH_PREFIX).replace('.json', '.csv')
-            output_blob_path = os.path.join(os.path.dirname(args.INPUT_BLOB_PATH_PREFIX), output_blob_name)
-            
-            # Create an instance of our streaming CSV writer
-            csv_streamer = CsvStreamer(full_row_iterator, headers)
+            # --- UPLOAD LOGIC ---
+            if input_blob_size < CHUNK_THRESHOLD_BYTES:
+                # Original logic: process all at once for smaller files
+                print("Input blob is smaller than threshold. Processing as a single CSV.")
+                output_blob_name = os.path.basename(args.INPUT_BLOB_PATH_PREFIX).replace('.json', '.csv')
+                output_blob_path = os.path.join(os.path.dirname(args.INPUT_BLOB_PATH_PREFIX), output_blob_name)
+                
+                # Create an instance of our streaming CSV writer
+                csv_streamer = CsvStreamer(full_row_iterator, headers)
 
-            # Upload the CSV data directly from the CsvStreamer
-            output_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=output_blob_path)
-            
-            print(f"Uploading processed CSV to: {output_blob_path}")
-            upload_start = time.time()
-            output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
-            upload_end = time.time()
-            print("Upload complete.")
-            
-            end_time = time.time()
-            print(f"Upload time: {upload_end - upload_start:.2f} seconds")
-            print(f"Total processing time: {end_time - start_time:.2f} seconds")
-            print(f"Rows processed: {csv_streamer.get_row_count()}")
-            print(f"Processing rate: {csv_streamer.get_row_count() / (end_time - start_time):.1f} rows/second")
+                # Upload the CSV data directly from the CsvStreamer
+                output_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=output_blob_path)
+                
+                print(f"Uploading processed CSV to: {output_blob_path}")
+                upload_start = time.time()
+                output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+                upload_end = time.time()
+                print("Upload complete.")
+                
+                end_time = time.time()
+                print(f"Upload time: {upload_end - upload_start:.2f} seconds")
+                print(f"Total processing time: {end_time - start_time:.2f} seconds")
+                print(f"Rows processed: {csv_streamer.get_row_count()}")
+                print(f"Processing rate: {csv_streamer.get_row_count() / (end_time - start_time):.1f} rows/second")
+            else:
+                # New chunking logic for large files
+                print(f"Input blob is large. Using chunked CSV output (chunk size: {CHUNK_THRESHOLD_BYTES / (1024*1024):.2f} MB).")
+                chunk_number = 1
+                total_rows_processed = 0
+                output_blob_basename = os.path.basename(args.INPUT_BLOB_PATH_PREFIX).replace('.json', '')
+                output_blob_dir = os.path.dirname(args.INPUT_BLOB_PATH_PREFIX)
+                
+                header_line = (','.join(map(escape_csv_value, headers)) + '\n').encode('utf-8')
+                current_chunk_buffer = io.BytesIO()
+                current_chunk_buffer.write(header_line)
+
+                for row in full_row_iterator:
+                    line = ','.join(escape_csv_value(row.get(h)) for h in headers) + '\n'
+                    current_chunk_buffer.write(line.encode('utf-8'))
+                    total_rows_processed += 1
+
+                    if current_chunk_buffer.tell() >= CHUNK_THRESHOLD_BYTES:
+                        output_blob_name = f"{output_blob_basename}_part_{chunk_number:04d}.csv"
+                        output_blob_path = os.path.join(output_blob_dir, output_blob_name)
+                        output_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=output_blob_path)
+                        
+                        print(f"Uploading chunk {chunk_number} ({current_chunk_buffer.tell() / (1024*1024):.2f} MB) to {output_blob_path}")
+                        current_chunk_buffer.seek(0)
+                        output_blob_client.upload_blob(current_chunk_buffer.getvalue(), overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+                        print(f"Chunk {chunk_number} upload complete.")
+                        
+                        chunk_number += 1
+                        current_chunk_buffer = io.BytesIO()
+                        current_chunk_buffer.write(header_line)
+
+                # Upload the last remaining chunk if it contains data
+                if current_chunk_buffer.tell() > len(header_line):
+                    output_blob_name = f"{output_blob_basename}_part_{chunk_number:04d}.csv"
+                    output_blob_path = os.path.join(output_blob_dir, output_blob_name)
+                    output_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=output_blob_path)
+
+                    print(f"Uploading final chunk {chunk_number} ({current_chunk_buffer.tell() / (1024*1024):.2f} MB) to {output_blob_path}")
+                    current_chunk_buffer.seek(0)
+                    output_blob_client.upload_blob(current_chunk_buffer.getvalue(), overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+                    print(f"Chunk {chunk_number} upload complete.")
+                
+                end_time = time.time()
+                print(f"Total processing time: {end_time - start_time:.2f} seconds")
+                print(f"Total rows processed: {total_rows_processed}")
+                if (end_time - start_time) > 0:
+                    print(f"Processing rate: {total_rows_processed / (end_time - start_time):.1f} rows/second")
 
     except Exception as e:
         print(f"An error occurred: {e}")
