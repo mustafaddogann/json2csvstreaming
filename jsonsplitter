@@ -1,0 +1,61 @@
+import json
+
+def split_json_by_size(input_file, output_prefix, nested_path, max_bytes=26214400):
+    keys = nested_path.split('.')
+
+    with open(input_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    # Navigate to nested list and remove it from root dict
+    d = data
+    for k in keys[:-1]:
+        d = d[k]
+    nested_list_key = keys[-1]
+    nested_list = d.pop(nested_list_key)
+
+    chunk = []
+    current_size = 0
+    file_index = 1
+
+    for item in nested_list:
+        item_str = json.dumps(item, ensure_ascii=False)
+        item_size = len(item_str.encode('utf-8'))
+
+        if current_size + item_size > max_bytes and chunk:
+            # Write current chunk
+            out_json = data.copy()
+            dd = out_json
+            for k in keys[:-1]:
+                dd = dd[k]
+            dd[nested_list_key] = chunk
+
+            out_file = f"{output_prefix}_part_{file_index}.json"
+            with open(out_file, 'w', encoding='utf-8') as f_out:
+                json.dump(out_json, f_out, ensure_ascii=False, indent=2)
+
+            print(f"Wrote {out_file} with ~{current_size / (1024*1024):.2f} MB and {len(chunk)} items")
+
+            # Reset chunk
+            chunk = []
+            current_size = 0
+            file_index += 1
+
+        chunk.append(item)
+        current_size += item_size
+
+    # Write last chunk if any
+    if chunk:
+        out_json = data.copy()
+        dd = out_json
+        for k in keys[:-1]:
+            dd = dd[k]
+        dd[nested_list_key] = chunk
+
+        out_file = f"{output_prefix}_part_{file_index}.json"
+        with open(out_file, 'w', encoding='utf-8') as f_out:
+            json.dump(out_json, f_out, ensure_ascii=False, indent=2)
+
+        print(f"Wrote {out_file} with ~{current_size / (1024*1024):.2f} MB and {len(chunk)} items")
+
+# Example usage:
+split_json_by_size('row_domain_2025-04-07.json', 'row_domain_2025-04-07', 'assessment_domain_v', max_bytes=26214400)
