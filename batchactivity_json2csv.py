@@ -179,7 +179,7 @@ def main():
     """
     start_time = time.time()
     
-    print(f"--- Running script version 1.4: Performance-Optimized Chunking ---")
+    print(f"--- Running script version 1.5: Optimized Chunk Uploads ---")
     print(f"Script started at: {datetime.now()}")
     
     args = parse_args()
@@ -264,7 +264,7 @@ def main():
                 
                 print(f"Uploading processed CSV to: {output_blob_path}")
                 upload_start = time.time()
-                output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+                output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'), max_concurrency=4)
                 upload_end = time.time()
                 print("Upload complete.")
                 
@@ -297,7 +297,7 @@ def main():
                         
                         print(f"Uploading chunk {chunk_number} ({current_chunk_buffer.tell() / (1024*1024):.2f} MB) to {output_blob_path}")
                         current_chunk_buffer.seek(0)
-                        output_blob_client.upload_blob(current_chunk_buffer.getvalue(), overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+                        output_blob_client.upload_blob(current_chunk_buffer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'), max_concurrency=4)
                         print(f"Chunk {chunk_number} upload complete.")
                         
                         chunk_number += 1
@@ -312,7 +312,7 @@ def main():
 
                     print(f"Uploading final chunk {chunk_number} ({current_chunk_buffer.tell() / (1024*1024):.2f} MB) to {output_blob_path}")
                     current_chunk_buffer.seek(0)
-                    output_blob_client.upload_blob(current_chunk_buffer.getvalue(), overwrite=True, content_settings=ContentSettings(content_type='text/csv'))
+                    output_blob_client.upload_blob(current_chunk_buffer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'), max_concurrency=4)
                     print(f"Chunk {chunk_number} upload complete.")
                 
                 end_time = time.time()
