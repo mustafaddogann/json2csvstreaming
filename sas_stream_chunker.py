@@ -1,6 +1,7 @@
 import os
 import argparse
 import pandas as pd
+import numpy as np
 
 def escape_field(field):
     """Escape quotes and backslashes using backslash escaping for ADF compatibility."""
@@ -54,11 +55,20 @@ def stream_sas_to_csv_chunks(
             current_size = header_size
         
         for _, row in df_chunk.iterrows():
-            # Convert each cell to string, decoding bytes when necessary.
-            str_row = [
-                (item.decode('utf-8', 'replace') if isinstance(item, bytes) else str(item))
-                for item in row
-            ]
+            def cell_to_str(cell):
+                """Convert cell to string suitable for CSV: blank for NA/NaT/None."""
+                import math
+                import pandas as _pd
+                import numpy as _np
+                # Handle bytes -> decode first
+                if isinstance(cell, bytes):
+                    cell = cell.decode('utf-8', 'replace')
+                # Pandas NA types / numpy.nan / None
+                if cell is None or (isinstance(cell, float) and math.isnan(cell)) or cell is _pd.NA or cell is _pd.NaT or (isinstance(cell, _pd.Timestamp) and _pd.isna(cell)):
+                    return ''
+                return str(cell)
+
+            str_row = [cell_to_str(item) for item in row]
             
             escaped_row = [escape_field(field) for field in str_row]
             line_to_write = ','.join(escaped_row) + '\n'
