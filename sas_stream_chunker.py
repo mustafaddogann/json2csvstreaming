@@ -1,6 +1,6 @@
 import os
 import argparse
-import pyreadstat
+import pandas as pd
 
 def escape_field(field):
     """Escape quotes and backslashes using backslash escaping for ADF compatibility."""
@@ -23,13 +23,13 @@ def stream_sas_to_csv_chunks(
     os.makedirs(output_dir, exist_ok=True)
     base_filename = os.path.splitext(os.path.basename(input_sas_path))[0]
 
+    # Use pandas' chunked reader for SAS files to avoid loading the whole
+    # dataset in memory at once. `read_sas` with `chunksize` returns an
+    # iterator that yields DataFrames of up to `read_chunk_size` rows.
     try:
-        reader, meta = pyreadstat.read_sas7bdat(
-            input_sas_path,
-            chunksize=read_chunk_size
-        )
+        reader = pd.read_sas(input_sas_path, chunksize=read_chunk_size)
     except Exception as e:
-        print(f"Error reading SAS file: {e}")
+        print(f"Error reading SAS file in chunks: {e}")
         return
 
     chunk_number = 1
@@ -54,7 +54,11 @@ def stream_sas_to_csv_chunks(
             current_size = header_size
         
         for _, row in df_chunk.iterrows():
-            str_row = [str(item) for item in row]
+            # Convert each cell to string, decoding bytes when necessary.
+            str_row = [
+                (item.decode('utf-8', 'replace') if isinstance(item, bytes) else str(item))
+                for item in row
+            ]
             
             escaped_row = [escape_field(field) for field in str_row]
             line_to_write = ','.join(escaped_row) + '\n'
