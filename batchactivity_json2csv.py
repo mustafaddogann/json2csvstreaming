@@ -179,23 +179,17 @@ def main():
     """
     start_time = time.time()
     
-    print(f"--- Running script version 1.3: Chunked Output ---")
+    print(f"--- Running script version 1.4: Performance-Optimized Chunking ---")
     print(f"Script started at: {datetime.now()}")
     
     args = parse_args()
 
-    # Define chunk size for output files (e.g., 250MB)
-    CHUNK_THRESHOLD_BYTES = 250 * 1024 * 1024
+    # Define chunk size for output files (e.g., 150MB)
+    CHUNK_THRESHOLD_BYTES = 150 * 1024 * 1024
 
     try:
         blob_service = BlobServiceClient.from_connection_string(args.AZURE_STORAGE_CONNECTION_STRING)
         input_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=args.INPUT_BLOB_PATH_PREFIX)
-
-        # Get blob size to determine if we need to chunk
-        print("Getting input blob properties...")
-        blob_properties = input_blob_client.get_blob_properties()
-        input_blob_size = blob_properties.size
-        print(f"Input blob size: {input_blob_size / (1024*1024):.2f} MB")
 
         # Generate a SAS token to stream the blob directly with the `requests` library.
         # This bypasses a bug in the Azure SDK's streaming downloader and allows true streaming.
@@ -213,6 +207,15 @@ def main():
         print(f"Streaming blob directly from URL using requests...")
         with requests.get(blob_url_with_sas, stream=True) as r:
             r.raise_for_status()
+
+            # Get blob size from Content-Length header to determine if we need to chunk.
+            # This avoids a separate and slow get_blob_properties() call.
+            print("Getting input blob size from response header...")
+            input_blob_size = int(r.headers.get('Content-Length', 0))
+            if input_blob_size > 0:
+                print(f"Input blob size: {input_blob_size / (1024*1024):.2f} MB")
+            else:
+                print("Warning: Could not determine input blob size from header. Assuming small file for single CSV output.")
 
             ijson_path = f'{args.NESTED_PATH}.item' if args.NESTED_PATH else 'item'
             # Use 1MB buffer for better performance on dedicated nodes
