@@ -135,6 +135,7 @@ class CsvStreamer(RawIOBase):
         self._buffer = BytesIO()
         self._write_header = True
         self._row_count = 0
+        self._bytes_written = 0
 
     def readable(self):
         return True
@@ -144,12 +145,15 @@ class CsvStreamer(RawIOBase):
         if self._write_header:
             header_line = (','.join(map(escape_csv_value, self.headers)) + '\n').encode('utf-8')
             self._buffer.write(header_line)
+            self._bytes_written += len(header_line)
             self._write_header = False
 
         try:
             row = next(self.row_iterator)
             line = ','.join(escape_csv_value(row.get(h)) for h in self.headers) + '\n'
-            self._buffer.write(line.encode('utf-8'))
+            line_bytes = line.encode('utf-8')
+            self._buffer.write(line_bytes)
+            self._bytes_written += len(line_bytes)
             self._row_count += 1
         except StopIteration:
             pass # No more rows
@@ -172,6 +176,74 @@ class CsvStreamer(RawIOBase):
     
     def get_row_count(self):
         return self._row_count
+    
+    def get_bytes_written(self):
+        return self._bytes_written
+
+
+class ChunkedCsvStreamer:
+    """
+    Manages streaming CSV data in chunks, creating new streamers when size threshold is reached.
+    """
+    def __init__(self, row_iterator: Iterator[Dict[str, Any]], headers: List[str], chunk_threshold_bytes: int):
+        self.row_iterator = row_iterator
+        self.headers = headers
+        self.chunk_threshold_bytes = chunk_threshold_bytes
+        self.current_streamer = None
+        self.total_rows = 0
+        self.chunk_number = 0
+        self._exhausted = False
+        self._peeked_row = None
+        
+    def get_next_chunk_streamer(self) -> Tuple[CsvStreamer, bool]:
+        """
+        Returns a tuple of (streamer, is_last_chunk).
+        The streamer will stop when it reaches the chunk threshold or runs out of data.
+        """
+        if self._exhausted:
+            return None, True
+            
+        self.chunk_number += 1
+        
+        # Create a limited iterator that stops at chunk threshold
+        def limited_iterator():
+            bytes_in_chunk = 0
+            # Include header size in calculation
+            header_line = (','.join(map(escape_csv_value, self.headers)) + '\n').encode('utf-8')
+            bytes_in_chunk += len(header_line)
+            
+            # If we have a peeked row from previous chunk, yield it first
+            if self._peeked_row is not None:
+                line = ','.join(escape_csv_value(self._peeked_row.get(h)) for h in self.headers) + '\n'
+                bytes_in_chunk += len(line.encode('utf-8'))
+                yield self._peeked_row
+                self.total_rows += 1
+                self._peeked_row = None
+            
+            for row in self.row_iterator:
+                # Calculate size of this row
+                line = ','.join(escape_csv_value(row.get(h)) for h in self.headers) + '\n'
+                row_size = len(line.encode('utf-8'))
+                
+                # Check if adding this row would exceed threshold
+                if bytes_in_chunk + row_size > self.chunk_threshold_bytes and bytes_in_chunk > len(header_line):
+                    # Save this row for next chunk
+                    self._peeked_row = row
+                    return
+                
+                bytes_in_chunk += row_size
+                yield row
+                self.total_rows += 1
+            
+            # If we get here, iterator is exhausted
+            self._exhausted = True
+        
+        streamer = CsvStreamer(limited_iterator(), self.headers)
+        return streamer, self._exhausted and self._peeked_row is None
+    
+    def get_total_rows(self):
+        return self.total_rows
+
 
 def main():
     """
@@ -179,7 +251,7 @@ def main():
     """
     start_time = time.time()
     
-    print(f"--- Running script version 1.5: Optimized Chunk Uploads ---")
+    print(f"--- Running script version 1.6: Streaming Chunks ---")
     print(f"Script started at: {datetime.now()}")
     
     args = parse_args()
@@ -274,52 +346,36 @@ def main():
                 print(f"Rows processed: {csv_streamer.get_row_count()}")
                 print(f"Processing rate: {csv_streamer.get_row_count() / (end_time - start_time):.1f} rows/second")
             else:
-                # New chunking logic for large files
-                print(f"Input blob is large. Using chunked CSV output (chunk size: {CHUNK_THRESHOLD_BYTES / (1024*1024):.2f} MB).")
-                chunk_number = 1
-                total_rows_processed = 0
+                # New streaming chunk logic for large files
+                print(f"Input blob is large. Using streaming chunked CSV output (chunk size: {CHUNK_THRESHOLD_BYTES / (1024*1024):.2f} MB).")
                 output_blob_basename = os.path.basename(args.INPUT_BLOB_PATH_PREFIX).replace('.json', '')
                 output_blob_dir = os.path.dirname(args.INPUT_BLOB_PATH_PREFIX)
                 
-                header_line = (','.join(map(escape_csv_value, headers)) + '\n').encode('utf-8')
-                current_chunk_buffer = io.BytesIO()
-                current_chunk_buffer.write(header_line)
-
-                for row in full_row_iterator:
-                    line = ','.join(escape_csv_value(row.get(h)) for h in headers) + '\n'
-                    current_chunk_buffer.write(line.encode('utf-8'))
-                    total_rows_processed += 1
-
-                    if current_chunk_buffer.tell() >= CHUNK_THRESHOLD_BYTES:
-                        output_blob_name = f"{output_blob_basename}_part_{chunk_number:04d}.csv"
-                        output_blob_path = os.path.join(output_blob_dir, output_blob_name)
-                        output_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=output_blob_path)
+                chunked_streamer = ChunkedCsvStreamer(full_row_iterator, headers, CHUNK_THRESHOLD_BYTES)
+                
+                while True:
+                    chunk_streamer, is_last = chunked_streamer.get_next_chunk_streamer()
+                    if chunk_streamer is None:
+                        break
                         
-                        print(f"Uploading chunk {chunk_number} ({current_chunk_buffer.tell() / (1024*1024):.2f} MB) to {output_blob_path}")
-                        current_chunk_buffer.seek(0)
-                        output_blob_client.upload_blob(current_chunk_buffer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'), max_concurrency=4)
-                        print(f"Chunk {chunk_number} upload complete.")
-                        
-                        chunk_number += 1
-                        current_chunk_buffer = io.BytesIO()
-                        current_chunk_buffer.write(header_line)
-
-                # Upload the last remaining chunk if it contains data
-                if current_chunk_buffer.tell() > len(header_line):
-                    output_blob_name = f"{output_blob_basename}_part_{chunk_number:04d}.csv"
+                    output_blob_name = f"{output_blob_basename}_part_{chunked_streamer.chunk_number:04d}.csv"
                     output_blob_path = os.path.join(output_blob_dir, output_blob_name)
                     output_blob_client = blob_service.get_blob_client(container=args.INPUT_CONTAINER_NAME, blob=output_blob_path)
-
-                    print(f"Uploading final chunk {chunk_number} ({current_chunk_buffer.tell() / (1024*1024):.2f} MB) to {output_blob_path}")
-                    current_chunk_buffer.seek(0)
-                    output_blob_client.upload_blob(current_chunk_buffer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'), max_concurrency=4)
-                    print(f"Chunk {chunk_number} upload complete.")
+                    
+                    print(f"Streaming chunk {chunked_streamer.chunk_number} to {output_blob_path}")
+                    chunk_start = time.time()
+                    output_blob_client.upload_blob(chunk_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'), max_concurrency=4)
+                    chunk_end = time.time()
+                    print(f"Chunk {chunked_streamer.chunk_number} upload complete in {chunk_end - chunk_start:.2f} seconds ({chunk_streamer.get_row_count()} rows, {chunk_streamer.get_bytes_written() / (1024*1024):.2f} MB)")
+                    
+                    if is_last:
+                        break
                 
                 end_time = time.time()
                 print(f"Total processing time: {end_time - start_time:.2f} seconds")
-                print(f"Total rows processed: {total_rows_processed}")
+                print(f"Total rows processed: {chunked_streamer.get_total_rows()}")
                 if (end_time - start_time) > 0:
-                    print(f"Processing rate: {total_rows_processed / (end_time - start_time):.1f} rows/second")
+                    print(f"Processing rate: {chunked_streamer.get_total_rows() / (end_time - start_time):.1f} rows/second")
 
     except Exception as e:
         print(f"An error occurred: {e}")
