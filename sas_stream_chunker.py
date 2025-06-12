@@ -66,6 +66,12 @@ def stream_sas_to_csv_chunks(
                 # Pandas NA types / numpy.nan / None
                 if cell is None or (isinstance(cell, float) and math.isnan(cell)) or cell is _pd.NA or cell is _pd.NaT or (isinstance(cell, _pd.Timestamp) and _pd.isna(cell)):
                     return ''
+                # pandas Timestamp -> format without time component if it's exactly midnight
+                if isinstance(cell, _pd.Timestamp):
+                    if cell.hour == 0 and cell.minute == 0 and cell.second == 0 and cell.microsecond == 0:
+                        return cell.strftime('%Y-%m-%d')
+                    else:
+                        return cell.strftime('%Y-%m-%d %H:%M:%S')
                 return str(cell)
 
             str_row = [cell_to_str(item) for item in row]
