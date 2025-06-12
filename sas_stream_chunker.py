@@ -72,6 +72,15 @@ def stream_sas_to_csv_chunks(
                         return cell.strftime('%Y-%m-%d')
                     else:
                         return cell.strftime('%Y-%m-%d %H:%M:%S')
+                # Numeric seconds since midnight -> HH:MM:SS  (SAS time)
+                if isinstance(cell, (int, float)):
+                    # treat as SAS time if within 0->86400 range
+                    if 0 <= cell < 86_400:
+                        total_sec = int(round(cell))
+                        h = total_sec // 3600
+                        m = (total_sec % 3600) // 60
+                        s = total_sec % 60
+                        return f"{h:02d}:{m:02d}:{s:02d}"
                 return str(cell)
 
             str_row = [cell_to_str(item) for item in row]
