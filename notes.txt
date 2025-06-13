@@ -151,3 +151,7 @@ With the C backend working:
 Your 200MB file should process in 2-5 minutes instead of 40 minutes
 The performance improvement is typically 10-50x for JSON parsing
 Try the updated script first. If it successfully installs the Visual C++ runtime, you should see a dramatic performance improvement. Let me know if you need help with any of the other solutions!
+
+
+
+        cmd /c "powershell -Command \"Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile vc_redist.x64.exe; Start-Process -FilePath .\\vc_redist.x64.exe -ArgumentList '/install', '/quiet', '/norestart' -Wait; Remove-Item .\\vc_redist.x64.exe\""
