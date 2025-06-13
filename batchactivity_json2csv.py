@@ -21,6 +21,57 @@ except Exception:
         sys.path.insert(0, packages_dir)
         os.environ["PATH"] = packages_dir + os.pathsep + os.environ["PATH"]
 
+# Check if Visual C++ runtime is installed, install if not (Windows only)
+if sys.platform == "win32":
+    try:
+        # Try to import the C backend to see if it works
+        import ijson.backends.yajl2_c
+        print("Visual C++ runtime is already installed.")
+    except ImportError as e:
+        print(f"C backend import failed: {e}")
+        print("Visual C++ runtime may be missing. Attempting to install...")
+        
+        # Check if we're running with admin privileges (common in Batch)
+        import ctypes
+        try:
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+        except:
+            is_admin = False
+        
+        if is_admin:
+            try:
+                import subprocess
+                import urllib.request
+                
+                # Download VC++ runtime
+                vc_redist_url = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                vc_redist_path = os.path.join(os.environ.get('TEMP', '.'), 'vc_redist.x64.exe')
+                
+                print(f"Downloading Visual C++ runtime from {vc_redist_url}...")
+                urllib.request.urlretrieve(vc_redist_url, vc_redist_path)
+                
+                # Install silently
+                print("Installing Visual C++ runtime...")
+                result = subprocess.run([vc_redist_path, '/install', '/quiet', '/norestart'], 
+                                      capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    print("Visual C++ runtime installed successfully.")
+                    # Clean up
+                    try:
+                        os.remove(vc_redist_path)
+                    except:
+                        pass
+                else:
+                    print(f"Installation failed with code {result.returncode}")
+                    print(f"stdout: {result.stdout}")
+                    print(f"stderr: {result.stderr}")
+                    
+            except Exception as install_error:
+                print(f"Failed to install Visual C++ runtime: {install_error}")
+        else:
+            print("Not running with admin privileges, cannot install Visual C++ runtime.")
+
 import io
 import csv
 import json
@@ -48,6 +99,8 @@ except ImportError:
     except ImportError:
         import ijson.backends.python as ijson_backend
         print("Warning: C backend for ijson not found. Falling back to slower Python backend.")
+        print("This will significantly impact performance for large files.")
+        print("Consider installing Visual C++ runtime or using a Linux-based Batch pool.")
         backend_name = "python"
 
 # Print diagnostic info about the backend
@@ -208,38 +261,39 @@ class ChunkedCsvStreamer:
         # Create a limited iterator that stops at chunk threshold
         def limited_iterator():
             bytes_in_chunk = 0
-            # Include header size in calculation
-            header_line = (','.join(map(escape_csv_value, self.headers)) + '\n').encode('utf-8')
-            bytes_in_chunk += len(header_line)
+            rows_in_chunk = 0
             
             # If we have a peeked row from previous chunk, yield it first
             if self._peeked_row is not None:
-                line = ','.join(escape_csv_value(self._peeked_row.get(h)) for h in self.headers) + '\n'
-                bytes_in_chunk += len(line.encode('utf-8'))
                 yield self._peeked_row
                 self.total_rows += 1
+                rows_in_chunk += 1
                 self._peeked_row = None
             
+            # Process rows in batches to reduce overhead
+            batch_size = 1000  # Process 1000 rows at a time before checking size
+            
             for row in self.row_iterator:
-                # Calculate size of this row
-                line = ','.join(escape_csv_value(row.get(h)) for h in self.headers) + '\n'
-                row_size = len(line.encode('utf-8'))
-                
-                # Check if adding this row would exceed threshold
-                if bytes_in_chunk + row_size > self.chunk_threshold_bytes and bytes_in_chunk > len(header_line):
-                    # Save this row for next chunk
-                    self._peeked_row = row
-                    return
-                
-                bytes_in_chunk += row_size
                 yield row
                 self.total_rows += 1
+                rows_in_chunk += 1
+                
+                # Only check size every batch_size rows to reduce overhead
+                if rows_in_chunk % batch_size == 0:
+                    # Estimate bytes based on average row size
+                    # Assume average row is ~1KB (this is a rough estimate)
+                    estimated_bytes = rows_in_chunk * 1024
+                    
+                    if estimated_bytes >= self.chunk_threshold_bytes:
+                        print(f"  Chunk {self.chunk_number} reached size limit with {rows_in_chunk} rows")
+                        return
             
             # If we get here, iterator is exhausted
             self._exhausted = True
+            print(f"  Chunk {self.chunk_number} is final chunk with {rows_in_chunk} rows")
         
         streamer = CsvStreamer(limited_iterator(), self.headers)
-        return streamer, self._exhausted and self._peeked_row is None
+        return streamer, self._exhausted
     
     def get_total_rows(self):
         return self.total_rows
@@ -251,8 +305,10 @@ def main():
     """
     start_time = time.time()
     
-    print(f"--- Running script version 1.6: Streaming Chunks ---")
+    print(f"--- Running script version 1.7: Performance Optimized ---")
     print(f"Script started at: {datetime.now()}")
+    print(f"Python version: {sys.version}")
+    print(f"ijson backend: {backend_name}")
     
     args = parse_args()
 
@@ -266,6 +322,7 @@ def main():
         # Generate a SAS token to stream the blob directly with the `requests` library.
         # This bypasses a bug in the Azure SDK's streaming downloader and allows true streaming.
         print("Generating SAS token for direct download.")
+        sas_start = time.time()
         sas_token = generate_blob_sas(
             account_name=input_blob_client.account_name,
             container_name=input_blob_client.container_name,
@@ -275,14 +332,16 @@ def main():
             expiry=datetime.utcnow() + timedelta(hours=1)
         )
         blob_url_with_sas = f"{input_blob_client.url}?{sas_token}"
+        print(f"SAS token generated in {time.time() - sas_start:.2f} seconds")
 
-        print(f"Streaming blob directly from URL using requests...")
+        print(f"Starting blob download and processing...")
+        download_start = time.time()
+        
         with requests.get(blob_url_with_sas, stream=True) as r:
             r.raise_for_status()
+            print(f"HTTP response received in {time.time() - download_start:.2f} seconds")
 
             # Get blob size from Content-Length header to determine if we need to chunk.
-            # This avoids a separate and slow get_blob_properties() call.
-            print("Getting input blob size from response header...")
             input_blob_size = int(r.headers.get('Content-Length', 0))
             if input_blob_size > 0:
                 print(f"Input blob size: {input_blob_size / (1024*1024):.2f} MB")
@@ -290,18 +349,30 @@ def main():
                 print("Warning: Could not determine input blob size from header. Assuming small file for single CSV output.")
 
             ijson_path = f'{args.NESTED_PATH}.item' if args.NESTED_PATH else 'item'
-            # Use 1MB buffer for better performance on dedicated nodes
-            json_iterator = ijson_backend.items(r.raw, ijson_path, buf_size=1024*1024)
+            
+            # Use larger buffer for better performance
+            buffer_size = 4 * 1024 * 1024  # 4MB buffer
+            print(f"Using ijson with {buffer_size / (1024*1024):.1f}MB buffer")
+            
+            json_parse_start = time.time()
+            json_iterator = ijson_backend.items(r.raw, ijson_path, buf_size=buffer_size)
 
             # Create a processing pipeline using generators
             def expanded_generator():
+                item_count = 0
+                expand_count = 0
                 for obj in json_iterator:
+                    item_count += 1
+                    if item_count % 10000 == 0:
+                        elapsed = time.time() - json_parse_start
+                        print(f"  Processed {item_count} JSON items in {elapsed:.1f}s ({item_count/elapsed:.0f} items/sec)")
+                    
                     # In this version, we only expand top-level list-of-dicts
-                    # More complex logic would be needed for deeper nesting or cross-products
                     expanded_rows = [obj]
                     list_fields_to_expand = {k for k, v in obj.items() if isinstance(v, list) and v and isinstance(v[0], dict)}
 
                     if list_fields_to_expand:
+                        expand_count += 1
                         base_row = {k: v for k, v in obj.items() if k not in list_fields_to_expand}
                         # Assumption: expand only the first found list-of-dicts field
                         field_to_expand = list(list_fields_to_expand)[0]
@@ -309,12 +380,15 @@ def main():
                     
                     for row in expanded_rows:
                         yield row
+                
+                print(f"JSON parsing complete: {item_count} items processed, {expand_count} expanded")
 
             expanded_row_iterator = expanded_generator()
 
             try:
                 first_row = next(expanded_row_iterator)
                 headers = list(first_row.keys())
+                print(f"CSV headers ({len(headers)} columns): {headers[:5]}..." if len(headers) > 5 else f"CSV headers: {headers}")
             except StopIteration:
                 print("Warning: JSON stream was empty, no CSV file created.")
                 return
@@ -336,7 +410,7 @@ def main():
                 
                 print(f"Uploading processed CSV to: {output_blob_path}")
                 upload_start = time.time()
-                output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'), max_concurrency=4)
+                output_blob_client.upload_blob(csv_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'), max_concurrency=8)
                 upload_end = time.time()
                 print("Upload complete.")
                 
@@ -364,7 +438,7 @@ def main():
                     
                     print(f"Streaming chunk {chunked_streamer.chunk_number} to {output_blob_path}")
                     chunk_start = time.time()
-                    output_blob_client.upload_blob(chunk_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'), max_concurrency=4)
+                    output_blob_client.upload_blob(chunk_streamer, overwrite=True, content_settings=ContentSettings(content_type='text/csv'), max_concurrency=8)
                     chunk_end = time.time()
                     print(f"Chunk {chunked_streamer.chunk_number} upload complete in {chunk_end - chunk_start:.2f} seconds ({chunk_streamer.get_row_count()} rows, {chunk_streamer.get_bytes_written() / (1024*1024):.2f} MB)")
                     
@@ -379,8 +453,8 @@ def main():
 
     except Exception as e:
         print(f"An error occurred: {e}")
-        # In a real-world scenario, you might want more specific error handling
-        # and possibly exit with a non-zero status code.
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
