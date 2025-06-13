@@ -153,5 +153,7 @@ The performance improvement is typically 10-50x for JSON parsing
 Try the updated script first. If it successfully installs the Visual C++ runtime, you should see a dramatic performance improvement. Let me know if you need help with any of the other solutions!
 
 
-
-        cmd /c "powershell -Command \"Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile vc_redist.x64.exe; Start-Process -FilePath .\\vc_redist.x64.exe -ArgumentList '/install', '/quiet', '/norestart' -Wait; Remove-Item .\\vc_redist.x64.exe\""
+powershell -ExecutionPolicy Bypass -Command "Expand-Archive -Path batch-script.zip -DestinationPath .; .\\python.exe check_environment.py"
+D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\ebfe4a79-9206-4f57-b760-ace25e66f5c3\wd\python.exe: can't open file 'D:\\batch\\tasks\\workitems\\adfv2-edpcanspool_e4s_v3\\job-1\\ebfe4a79-9206-4f57-b760-ace25e66f5c3\\wd\\check_environment.py': [Errno 2] No such file or directory
+        
+        
