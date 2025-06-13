@@ -1,0 +1,153 @@
+The C backend not loading on Azure Batch is definitely the culprit. The Python backend is approximately 10-50x slower than the C backend for JSON parsing.
+The issue is that Windows Azure Batch nodes often don't have the Visual C++ runtime libraries that the compiled C extensions need. Here's how to fix this:
+Solution 1: Install Visual C++ Runtime on Batch Pool (Recommended)
+Let me modify your script to automatically install the Visual C++ runtime if it's not present:
+        sys.path.insert(0, packages_dir)
+        os.environ["PATH"] = packages_dir + os.pathsep + os.environ["PATH"]
+
+import io
+import csv
+import json
+import logging
+import argparse
+import itertools
+import requests
+from io import BytesIO, RawIOBase
+from datetime import datetime, timedelta
+from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
+from typing import Any, Dict, List, Iterator, Generator, Tuple
+import ijson
+import re
+
+# Recommended: Use the faster C backend if available
+try:
+    import ijson.backends.yajl2_cffi as ijson_backend
+    print("Using yajl2_cffi ijson backend.")
+    backend_name = "yajl2_cffi"
+except ImportError:
+    try:
+        import ijson.backends.yajl2_c as ijson_backend
+        print("Using yajl2_c ijson backend.")
+        backend_name = "yajl2_c"
+    except ImportError:
+        import ijson.backends.python as ijson_backend
+        print("Warning: C backend for ijson not found. Falling back to slower Python backend.")
+        backend_name = "python"
+
+# Print diagnostic info about the backend
+        sys.path.insert(0, packages_dir)
+        os.environ["PATH"] = packages_dir + os.pathsep + os.environ["PATH"]
+
+# Check if Visual C++ runtime is installed, install if not (Windows only)
+if sys.platform == "win32":
+    try:
+        # Try to import the C backend to see if it works
+        import ijson.backends.yajl2_c
+        print("Visual C++ runtime is already installed.")
+    except ImportError as e:
+        print(f"C backend import failed: {e}")
+        print("Visual C++ runtime may be missing. Attempting to install...")
+        
+        # Check if we're running with admin privileges (common in Batch)
+        import ctypes
+        try:
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+        except:
+            is_admin = False
+        
+        if is_admin:
+            try:
+                import subprocess
+                import urllib.request
+                
+                # Download VC++ runtime
+                vc_redist_url = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                vc_redist_path = os.path.join(os.environ.get('TEMP', '.'), 'vc_redist.x64.exe')
+                
+                print(f"Downloading Visual C++ runtime from {vc_redist_url}...")
+                urllib.request.urlretrieve(vc_redist_url, vc_redist_path)
+                
+                # Install silently
+                print("Installing Visual C++ runtime...")
+                result = subprocess.run([vc_redist_path, '/install', '/quiet', '/norestart'], 
+                                      capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    print("Visual C++ runtime installed successfully.")
+                    # Clean up
+                    try:
+                        os.remove(vc_redist_path)
+                    except:
+                        pass
+                else:
+                    print(f"Installation failed with code {result.returncode}")
+                    print(f"stdout: {result.stdout}")
+                    print(f"stderr: {result.stderr}")
+                    
+            except Exception as install_error:
+                print(f"Failed to install Visual C++ runtime: {install_error}")
+        else:
+            print("Not running with admin privileges, cannot install Visual C++ runtime.")
+
+import io
+import csv
+import json
+import logging
+import argparse
+import itertools
+import requests
+from io import BytesIO, RawIOBase
+from datetime import datetime, timedelta
+from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
+from typing import Any, Dict, List, Iterator, Generator, Tuple
+import ijson
+import re
+
+# Recommended: Use the faster C backend if available
+try:
+    import ijson.backends.yajl2_cffi as ijson_backend
+    print("Using yajl2_cffi ijson backend.")
+    backend_name = "yajl2_cffi"
+except ImportError:
+    try:
+        import ijson.backends.yajl2_c as ijson_backend
+        print("Using yajl2_c ijson backend.")
+        backend_name = "yajl2_c"
+    except ImportError:
+        import ijson.backends.python as ijson_backend
+        print("Warning: C backend for ijson not found. Falling back to slower Python backend.")
+        print("This will significantly impact performance for large files.")
+        print("Consider installing Visual C++ runtime or using a Linux-based Batch pool.")
+        backend_name = "python"
+
+# Print diagnostic info about the backend
+Solution 2: Use a Batch Pool Start Task
+If the above doesn't work (due to permissions), you can configure your Batch pool with a start task that installs the Visual C++ runtime:
+Apply to notes.txt
+{
+  "startTask": {
+    "commandLine": "cmd /c \"powershell -Command \\\"Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile vc_redist.x64.exe; Start-Process -FilePath .\\vc_redist.x64.exe -ArgumentList '/install', '/quiet', '/norestart' -Wait; Remove-Item .\\vc_redist.x64.exe\\\"\"",
+    "userIdentity": {
+      "autoUser": {
+        "elevationLevel": "admin"
+      }
+    },
+    "waitForSuccess": true
+  }
+}
+Solution 3: Switch to Linux Batch Pool (Best Performance)
+The most reliable solution is to use a Linux-based Batch pool. The C extensions work much more reliably on Linux. You would need to:
+Create a Linux Batch pool (e.g., Ubuntu 20.04)
+Package your Python dependencies for Linux
+The script would work without modification
+Solution 4: Pre-compile for Windows
+If you must use Windows, you can try including the Visual C++ runtime DLLs directly in your packages folder:
+msvcp140.dll
+vcruntime140.dll
+vcruntime140_1.dll
+These can be found in C:\Windows\System32 on a machine with Visual C++ installed.
+Expected Performance Improvement
+With the C backend working:
+Your 200MB file should process in 2-5 minutes instead of 40 minutes
+The performance improvement is typically 10-50x for JSON parsing
+Try the updated script first. If it successfully installs the Visual C++ runtime, you should see a dramatic performance improvement. Let me know if you need help with any of the other solutions!
