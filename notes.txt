@@ -156,4 +156,47 @@ Try the updated script first. If it successfully installs the Visual C++ runtime
 powershell -ExecutionPolicy Bypass -Command "Expand-Archive -Path batch-script.zip -DestinationPath .; .\\python.exe check_environment.py"
 D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\ebfe4a79-9206-4f57-b760-ace25e66f5c3\wd\python.exe: can't open file 'D:\\batch\\tasks\\workitems\\adfv2-edpcanspool_e4s_v3\\job-1\\ebfe4a79-9206-4f57-b760-ace25e66f5c3\\wd\\check_environment.py': [Errno 2] No such file or directory
         
-        
+=== Environment Diagnostic Script ===
+Python version: 3.10.10 (tags/v3.10.10:aad5f6a, Feb  7 2023, 17:20:36) [MSC v.1929 64 bit (AMD64)]
+Python executable: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\15188695-802c-4c20-9970-b90a508ae191\wd\python.exe
+Current directory: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\15188695-802c-4c20-9970-b90a508ae191\wd
+Script location: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\15188695-802c-4c20-9970-b90a508ae191\wd\check_environment.py
+Running as admin: 0
+
+=== Checking for Visual C++ Runtime ===
+msvcp140.dll: NOT FOUND at C:\Windows\System32\msvcp140.dll
+vcruntime140.dll: NOT FOUND at C:\Windows\System32\vcruntime140.dll
+vcruntime140_1.dll: NOT FOUND at C:\Windows\System32\vcruntime140_1.dll
+
+=== Checking Registry for VC++ Installation ===
+
+=== Checking packages directory ===
+Packages directory: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\15188695-802c-4c20-9970-b90a508ae191\wd\packages
+Exists: True
+
+ijson directory contents:
+ijson/
+  benchmark.py
+  common.py
+  compat.py
+  dump.py
+  utils.py
+  utils35.py
+  version.py
+  __init__.py
+  backends/
+    python.py
+    yajl.py
+    yajl2.py
+    yajl2_c.py
+    yajl2_cffi.py
+    _yajl2_ctypes_common.py
+    __init__.py
+
+=== Testing ijson C backend import ===
+FAILED: cannot import name '_yajl2' from 'ijson.backends' (D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\15188695-802c-4c20-9970-b90a508ae191\wd\packages\ijson\backends\__init__.py)
+
+Checking for yajl2_c.pyd at: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\15188695-802c-4c20-9970-b90a508ae191\wd\packages\ijson\backends\yajl2_c.pyd
+File exists: False
+
+=== End of diagnostic ===       
