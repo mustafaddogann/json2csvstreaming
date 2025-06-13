@@ -86,7 +86,7 @@ from typing import Any, Dict, List, Iterator, Generator, Tuple
 import ijson
 import re
 
-# Recommended: Use the faster C backend if available
+# Recommended: Use the faster C backend if available. Fail if not found.
 try:
     import ijson.backends.yajl2_cffi as ijson_backend
     print("Using yajl2_cffi ijson backend.")
@@ -96,12 +96,21 @@ except ImportError:
         import ijson.backends.yajl2_c as ijson_backend
         print("Using yajl2_c ijson backend.")
         backend_name = "yajl2_c"
-    except ImportError:
-        import ijson.backends.python as ijson_backend
-        print("Warning: C backend for ijson not found. Falling back to slower Python backend.")
-        print("This will significantly impact performance for large files.")
-        print("Consider installing Visual C++ runtime or using a Linux-based Batch pool.")
-        backend_name = "python"
+    except ImportError as e:
+        print("="*80)
+        print("FATAL ERROR: ijson C backend not found.")
+        print(f"ImportError: {e}")
+        print("The high-performance C backend for JSON parsing (yajl) could not be loaded.")
+        print("This is likely because the Visual C++ Redistributable is not installed on the Azure Batch node.")
+        print("\nACTION REQUIRED:")
+        print("To fix this, add a Start Task to your Azure Batch pool to install it.")
+        print("Go to your Batch Pool -> Start Task -> and configure the following:")
+        print("  - Command line: cmd /c \"powershell -Command \\\"Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile vc_redist.x64.exe; Start-Process -FilePath .\\vc_redist.x64.exe -ArgumentList '/install', '/quiet', '/norestart' -Wait; Remove-Item .\\vc_redist.x64.exe\\\"\"")
+        print("  - User identity: Task user (Admin)")
+        print("  - Wait for success: Enabled")
+        print("\nFalling back to the Python backend is disabled as it is too slow for production use.")
+        print("="*80)
+        sys.exit(1) # Exit with an error
 
 # Print diagnostic info about the backend
 print(f"ijson backend module: {ijson_backend}")
