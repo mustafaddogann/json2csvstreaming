@@ -60,5 +60,5 @@ venv/
 # Own project
 /ijson.whl
 /ijson-3.4.0-cp310-cp310-win_amd64.whl
-*.zip
+# *.zip
 .DS_Store 
