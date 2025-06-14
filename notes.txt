@@ -200,3 +200,22 @@ Checking for yajl2_c.pyd at: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\j
 File exists: False
 
 === End of diagnostic ===       
+
+
+=== Safe Environment Diagnostic Script ===
+Python version: 3.10.10 (tags/v3.10.10:aad5f6a, Feb 7 2023, 17:20:36) [MSC v.1929 64 bit (AMD64)]
+Python executable: D:\batch\tasks\workitems\adfv2-edpcanspool_e45_V3\job-1\3e25c506-8034-40d8-850b-83a6cb5633d6\wd\python.exe
+Current directory: D: \batch\tasks\workitems\adfv2-edpcanspool_e4s_V3\job-1\3e25c506-8034-40d8-850b-83a6cb5633d6\wd
+Running as admin: e
+=== Checking for visual C+ Runtime === msvcp140. dll: NOT FOUND at C: \Windows\System32\msvcp140.dll
+vcruntime140.dll: NOT FOUND at C-\windows \System32\vcruntime140.11
+vcruntime140_1.dll: NOT FOUND at C: \windows|System32\vcruntime140_1.d1]
+=== Checking packages directory ===
+Packages directory: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\3e25c506-8034-40d8-850b-83a6cb5633d6\wd\packages
+Exists: False
+=== Testing ijson import ===
+ijson imported successfully from: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\3e25c506-8034-40d8-850b-83a6cb5633d6\wd\s
+SUCCESS: yaj12_c backend imported!
+=== Script completed successfully ===
+
+    cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -Path batch-deployment.zip -DestinationPath . -Force\" && run.bat"
