@@ -69,8 +69,8 @@ venv/
 /old-folder/
 
 # Ignore zip files
-*.zip
-*.zip.*
+# *.zip
+# *.zip.*
 *.pyz
 
 # ... existing code ... 
