@@ -222,3 +222,18 @@ SUCCESS: yaj12_c backend imported!
     cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -Path batch-deployment.zip -DestinationPath . -Force\" && run.bat"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { Expand-Archive -Path batch-deployment.zip -DestinationPath . -Force; .\run.bat }"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { Expand-Archive -Path batch-deployment.zip -DestinationPath . -Force; .\run.bat }"   
+
+"========================================="
+"        Azure Batch Job Runner"
+"========================================="
+"Script Directory: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\4372420d-1ddb-4d8b-8622-d99308d4cf25\wd\"
+"Python Executable: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\4372420d-1ddb-4d8b-8622-d99308d4cf25\wd\python.exe"
+"Running Script: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\4372420d-1ddb-4d8b-8622-d99308d4cf25\wd\batchactivity_json2csv.py"
+"Arguments: "
+
+"Updated PATH: D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\4372420d-1ddb-4d8b-8622-d99308d4cf25\wd\;D:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\4372420d-1ddb-4d8b-8622-d99308d4cf25\wd\packages;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;D:\Users\PoolNonAdmin27440485\AppData\Local\Microsoft\WindowsApps;d:\batch\tasks\shared;d:\batch\tasks\workitems\adfv2-edpcanspool_e4s_v3\job-1\4372420d-1ddb-4d8b-8622-d99308d4cf25\wd"
+
+"Starting Python script..."
+"-----------------------------------------"
+"-----------------------------------------"
+"Python script finished with exit code: -1073741515"
