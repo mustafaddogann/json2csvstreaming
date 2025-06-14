@@ -61,4 +61,16 @@ venv/
 /ijson.whl
 /ijson-3.4.0-cp310-cp310-win_amd64.whl
 # *.zip
-.DS_Store 
+.DS_Store
+
+# Ignore packages and environments
+/packages/
+/azure-batch-json2csv/
+/old-folder/
+
+# Ignore zip files
+*.zip
+*.zip.*
+*.pyz
+
+# ... existing code ... 
