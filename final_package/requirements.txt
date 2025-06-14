@@ -1,0 +1,6 @@
+# This file lists the Python packages required by the project.
+# The environment is self-contained, so these are for reference.
+
+azure-storage-blob
+ijson
+requests 
