@@ -219,3 +219,6 @@ SUCCESS: yaj12_c backend imported!
 === Script completed successfully ===
 
     cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -Path batch-deployment.zip -DestinationPath . -Force\" && run.bat"
+    cmd /c "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -Path batch-deployment.zip -DestinationPath . -Force\" && run.bat"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { Expand-Archive -Path batch-deployment.zip -DestinationPath . -Force; .\run.bat }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { Expand-Archive -Path batch-deployment.zip -DestinationPath . -Force; .\run.bat }"   
