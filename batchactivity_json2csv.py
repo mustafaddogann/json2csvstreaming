@@ -184,11 +184,20 @@ def sanitize_filename(filename: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "_", filename)
 
 def escape_csv_value(value: Any) -> str:
-    """Escapes a value for CSV formatting."""
+    """
+    Escapes a value for Snowflake-compatible CSV formatting based on provided working script.
+    This uses backslash as the escape character for quotes and backslashes.
+    All fields are enclosed in double quotes.
+    None values become empty quoted fields "".
+    """
     if value is None:
-        return ''
-    # Convert to string, escape double quotes, and wrap in double quotes
-    s_val = str(value).replace('"', '""')
+        s_val = ''
+    else:
+        s_val = str(value)
+    
+    # Escape backslashes first, then double quotes with a backslash
+    s_val = s_val.replace('\\', '\\\\').replace('"', '\\"')
+    
     return f'"{s_val}"'
 
 class CsvStreamer(RawIOBase):
